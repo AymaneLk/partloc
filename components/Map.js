@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, Image, Dimensions, SafeAreaView, Alert } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -7,6 +7,7 @@ import FloatingMenu from './FloatingMenu';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useNavigation } from '@react-navigation/native';
 import { updateUserLocation, getFriendsLocations, subscribeToFriendsLocations, supabase } from '../supabaseClient';
+import { useFocusEffect } from '@react-navigation/native';
 
 // Import your custom icon images
 import customMarkerIcon from '../assets/location.png';
@@ -35,9 +36,19 @@ function MapComponent({ session }) {
   const [unavailableFriends, setUnavailableFriends] = useState([]);
   const [friendProfiles, setFriendProfiles] = useState({});
 
+  const loadFriendsLocations = useCallback(async () => {
+    try {
+      const friendsLocations = await getFriendsLocations(session);
+      setFriendsLocations(friendsLocations);
+    } catch (error) {
+      console.error('Error fetching friends locations:', error);
+    }
+  }, [session]);
+
   useEffect(() => {
     let locationSubscription;
     let friendsSubscription;
+    let locationUpdateInterval;
 
     (async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
@@ -72,13 +83,11 @@ function MapComponent({ session }) {
         }
       );
 
-      // Fetch initial friends' locations
-      try {
-        const friendsLocations = await getFriendsLocations(session);
-        setFriendsLocations(friendsLocations);
-      } catch (error) {
-        console.error('Error fetching friends locations:', error);
-      }
+      // Initial load of friends' locations
+      await loadFriendsLocations();
+
+      // Set up interval to update friends' locations every 5 seconds
+      locationUpdateInterval = setInterval(loadFriendsLocations, 5000);
 
       // Subscribe to friends' location updates
       friendsSubscription = await subscribeToFriendsLocations(session, (payload) => {
@@ -86,9 +95,16 @@ function MapComponent({ session }) {
           const updatedLocations = [...prevLocations];
           const index = updatedLocations.findIndex(loc => loc.user_id === payload.new.user_id);
           if (index !== -1) {
-            updatedLocations[index] = { ...updatedLocations[index], ...payload.new };
+            updatedLocations[index] = { 
+              ...updatedLocations[index], 
+              ...payload.new,
+              lastUpdated: new Date().toISOString()
+            };
           } else {
-            updatedLocations.push(payload.new);
+            updatedLocations.push({
+              ...payload.new,
+              lastUpdated: new Date().toISOString()
+            });
           }
           return updatedLocations;
         });
@@ -103,8 +119,17 @@ function MapComponent({ session }) {
       if (friendsSubscription) {
         friendsSubscription.unsubscribe();
       }
+      if (locationUpdateInterval) {
+        clearInterval(locationUpdateInterval);
+      }
     };
-  }, [session]);
+  }, [session, loadFriendsLocations]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadFriendsLocations();
+    }, [loadFriendsLocations])
+  );
 
   const changeMapStyle = () => {
     setCurrentStyleIndex((prevIndex) => (prevIndex + 1) % mapStyles.length);
@@ -148,6 +173,46 @@ function MapComponent({ session }) {
     );
   }
 
+  const getLocationDescription = (timestamp) => {
+    const now = new Date();
+    const lastUpdated = new Date(timestamp);
+    const diffInSeconds = Math.floor((now - lastUpdated) / 1000);
+
+    if (diffInSeconds <= 10) {
+      return 'Current location';
+    } else {
+      if (diffInSeconds < 60) {
+        return `Last updated: ${diffInSeconds} seconds ago`;
+      } else if (diffInSeconds < 3600) {
+        const minutes = Math.floor(diffInSeconds / 60);
+        return `Last updated: ${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+      } else {
+        const hours = Math.floor(diffInSeconds / 3600);
+        return `Last updated: ${hours} hour${hours > 1 ? 's' : ''} ago`;
+      }
+    }
+  };
+
+  const getLocationStatus = (timestamp) => {
+    const now = new Date();
+    const lastUpdated = new Date(timestamp);
+    const diffInSeconds = Math.floor((now - lastUpdated) / 1000);
+
+    if (diffInSeconds <= 10) {
+      return { status: 'current', description: 'Current location' };
+    } else if (diffInSeconds <= 70) {
+      return { status: 'recent', description: `Updated ${diffInSeconds} seconds ago` };
+    } else {
+      const minutes = Math.floor(diffInSeconds / 60);
+      const hours = Math.floor(minutes / 60);
+      if (hours > 0) {
+        return { status: 'stale', description: `Updated ${hours} hour${hours > 1 ? 's' : ''} ago` };
+      } else {
+        return { status: 'stale', description: `Updated ${minutes} minute${minutes > 1 ? 's' : ''} ago` };
+      }
+    }
+  };
+
   return (
     <View style={styles.container}>
       <MapView
@@ -176,21 +241,28 @@ function MapComponent({ session }) {
             />
           </Marker>
         )}
-        {friendsLocations.map((friend) => (
-          <Marker
-            key={friend.user_id}
-            coordinate={{
-              latitude: friend.latitude,
-              longitude: friend.longitude,
-            }}
-            title={friend.profiles.full_name}
-            description={`Last updated: ${new Date(friend.timestamp).toLocaleString()}`}
-          >
-            <View style={styles.friendMarker}>
-              <Text style={styles.friendMarkerText}>{friend.profiles.full_name}</Text>
-            </View>
-          </Marker>
-        ))}
+        {friendsLocations.length > 0 ? (
+          friendsLocations.map((friend) => {
+            const { status, description } = getLocationStatus(friend.timestamp);
+            return (
+              <Marker
+                key={friend.user_id}
+                coordinate={{
+                  latitude: friend.latitude,
+                  longitude: friend.longitude,
+                }}
+                title={friend.profiles.full_name}
+                description={description}
+              >
+                <View style={[styles.friendMarker, styles[`${status}Marker`]]}>
+                  <Text style={styles.friendMarkerText}>{friend.profiles.full_name}</Text>
+                </View>
+              </Marker>
+            );
+          })
+        ) : (
+          <Text>No friends' locations available</Text>
+        )}
       </MapView>
       <FloatingMenu onProfilePress={goToProfile} />
       
@@ -272,13 +344,21 @@ const styles = StyleSheet.create({
     shadowRadius: 3.84,
   },
   friendMarker: {
-    backgroundColor: colors.accent,
     padding: 5,
     borderRadius: 5,
   },
   friendMarkerText: {
     color: 'white',
     fontWeight: 'bold',
+  },
+  currentMarker: {
+    backgroundColor: colors.accent,
+  },
+  recentMarker: {
+    backgroundColor: '#FFA500', // Orange color for recent locations
+  },
+  staleMarker: {
+    backgroundColor: colors.secondary,
   },
 });
 
