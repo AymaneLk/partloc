@@ -79,6 +79,13 @@ function App() {
     return () => clearInterval(refreshInterval);
   }, [session]);
 
+  const reloadSession = async () => {
+    const newSession = await refreshSession();
+    if (newSession) {
+      setSession(newSession);
+    }
+  };
+
   if (isLoading || !fontsLoaded) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
@@ -94,7 +101,7 @@ function App() {
         {session && session.user ? (
           <>
             <Stack.Screen name="Map">
-              {(props) => <MapComponent {...props} session={session} />}
+              {(props) => <MapComponent {...props} session={session} reloadSession={reloadSession} />}
             </Stack.Screen>
             <Stack.Screen name="Settings">
               {(props) => <Settings {...props} session={session} />}
@@ -106,10 +113,10 @@ function App() {
               {(props) => <FriendsList {...props} session={session} />}
             </Stack.Screen>
             <Stack.Screen name="AddFriend">
-              {(props) => <AddFriend {...props} session={session} />}
+              {(props) => <AddFriend {...props} session={session} reloadSession={reloadSession} />}
             </Stack.Screen>
             <Stack.Screen name="FriendRequests">
-              {(props) => <FriendRequests {...props} session={session} />}
+              {(props) => <FriendRequests {...props} session={session} reloadSession={reloadSession} />}
             </Stack.Screen>
           </>
         ) : (

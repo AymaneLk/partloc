@@ -3,7 +3,7 @@ import { View, Text, FlatList, StyleSheet, TouchableOpacity, Image, ActivityIndi
 import { getPendingFriendRequests, acceptFriendRequest, rejectFriendRequest } from '../supabaseClient';
 import { colors } from '../theme';
 
-const FriendRequests = () => {
+const FriendRequests = ({ session, reloadSession }) => {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -26,7 +26,10 @@ const FriendRequests = () => {
   const handleAccept = async (friendshipId) => {
     try {
       await acceptFriendRequest(friendshipId);
-      loadRequests();
+      await loadRequests();
+      if (reloadSession) {
+        await reloadSession();
+      }
     } catch (error) {
       console.error('Error accepting friend request:', error);
     }
@@ -35,7 +38,7 @@ const FriendRequests = () => {
   const handleReject = async (friendshipId) => {
     try {
       await rejectFriendRequest(friendshipId);
-      loadRequests();
+      await loadRequests();
     } catch (error) {
       console.error('Error rejecting friend request:', error);
     }

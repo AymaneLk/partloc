@@ -115,9 +115,24 @@ export const getFriends = async (session) => {
 
   if (error) throw error;
 
-  return data.map(friendship => 
-    friendship.user.user_id === session.user.id ? friendship.friend : friendship.user
-  );
+  // Use a Set to keep track of unique user_ids
+  const uniqueFriends = new Set();
+  const friends = data.map(friendship => {
+    const friend = friendship.user.user_id === session.user.id ? friendship.friend : friendship.user;
+    return {
+      ...friend,
+      friendship_id: friendship.id
+    };
+  }).filter(friend => {
+    // Only keep the friend if we haven't seen their user_id before
+    if (!uniqueFriends.has(friend.user_id)) {
+      uniqueFriends.add(friend.user_id);
+      return true;
+    }
+    return false;
+  });
+
+  return friends;
 };
 
 export const getPendingFriendRequests = async () => {
@@ -163,7 +178,7 @@ export const updateUserLocation = async (session, latitude, longitude) => {
 export const getFriendsLocations = async (session) => {
   if (!session || !session.user) throw new Error('Not authenticated');
 
-  // Get all friendships where the current user is either user_id or friend_id
+  // First, get all friendships
   const { data: friendships, error: friendshipsError } = await supabase
     .from('friendships')
     .select('user_id, friend_id')
@@ -172,14 +187,17 @@ export const getFriendsLocations = async (session) => {
 
   if (friendshipsError) throw friendshipsError;
 
-  // Extract all friend IDs (both from user_id and friend_id)
+  // Extract friend IDs
   const friendIds = friendships.reduce((ids, friendship) => {
     if (friendship.user_id !== session.user.id) ids.push(friendship.user_id);
     if (friendship.friend_id !== session.user.id) ids.push(friendship.friend_id);
     return ids;
   }, []);
 
-  // Get locations for all friends
+  // If there are no friends, return an empty array
+  if (friendIds.length === 0) return [];
+
+  // Now get the locations for these friends
   const { data: locations, error: locationsError } = await supabase
     .from('user_locations')
     .select(`
@@ -195,7 +213,6 @@ export const getFriendsLocations = async (session) => {
 
   if (locationsError) throw locationsError;
 
-  // Filter out any null locations and ensure all required fields are present
   const validLocations = locations.filter(loc => 
     loc && loc.latitude && loc.longitude && loc.profiles && loc.profiles.full_name
   );

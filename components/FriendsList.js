@@ -1,18 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, FlatList, StyleSheet, Image, SafeAreaView, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, FlatList, StyleSheet, Image, SafeAreaView, ActivityIndicator, RefreshControl } from 'react-native';
 import { getFriends } from '../supabaseClient';
 import { colors } from '../theme';
 
 const FriendsList = ({ session }) => {
   const [friends, setFriends] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    loadFriends();
-  }, []);
-
-  const loadFriends = async () => {
+  const loadFriends = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -24,7 +21,17 @@ const FriendsList = ({ session }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [session]);
+
+  useEffect(() => {
+    loadFriends();
+  }, [loadFriends]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadFriends();
+    setRefreshing(false);
+  }, [loadFriends]);
 
   const renderFriend = ({ item }) => (
     <View style={styles.friendItem}>
@@ -60,8 +67,11 @@ const FriendsList = ({ session }) => {
           <FlatList
             data={friends}
             renderItem={renderFriend}
-            keyExtractor={(item) => item.user_id}
+            keyExtractor={(item) => item.user_id.toString()}
             contentContainerStyle={styles.listContent}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            }
           />
         ) : (
           <Text style={styles.noFriendsText}>You have no friends yet.</Text>
