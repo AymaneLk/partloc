@@ -163,16 +163,23 @@ export const updateUserLocation = async (session, latitude, longitude) => {
 export const getFriendsLocations = async (session) => {
   if (!session || !session.user) throw new Error('Not authenticated');
 
+  // Get all friendships where the current user is either user_id or friend_id
   const { data: friendships, error: friendshipsError } = await supabase
     .from('friendships')
-    .select('friend_id')
-    .eq('user_id', session.user.id)
+    .select('user_id, friend_id')
+    .or(`user_id.eq.${session.user.id},friend_id.eq.${session.user.id}`)
     .eq('status', 'accepted');
 
   if (friendshipsError) throw friendshipsError;
 
-  const friendIds = friendships.map(f => f.friend_id);
+  // Extract all friend IDs (both from user_id and friend_id)
+  const friendIds = friendships.reduce((ids, friendship) => {
+    if (friendship.user_id !== session.user.id) ids.push(friendship.user_id);
+    if (friendship.friend_id !== session.user.id) ids.push(friendship.friend_id);
+    return ids;
+  }, []);
 
+  // Get locations for all friends
   const { data: locations, error: locationsError } = await supabase
     .from('user_locations')
     .select(`
