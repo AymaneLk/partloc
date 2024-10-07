@@ -206,7 +206,7 @@ export const getFriendsLocations = async (session) => {
       longitude,
       timestamp,
       is_sharing,
-      profiles:profiles!inner(user_id, full_name)
+      profiles:profiles!inner(user_id, full_name, avatar_url)
     `)
     .in('user_id', friendIds)
     .order('timestamp', { ascending: false });
@@ -214,7 +214,7 @@ export const getFriendsLocations = async (session) => {
   if (locationsError) throw locationsError;
 
   const validLocations = locations.filter(loc => 
-    loc && loc.latitude && loc.longitude && loc.profiles && loc.profiles.full_name
+    loc && loc.latitude && loc.longitude && loc.profiles
   );
 
   return validLocations;
@@ -240,6 +240,23 @@ export const subscribeToFriendsLocations = async (session, callback) => {
       schema: 'public',
       table: 'user_locations',
       filter: `user_id=in.(${friendIds.join(',')})`
+    }, payload => {
+      callback(payload);
+    })
+    .subscribe();
+};
+
+// Add this function to your existing supabaseClient.js file
+
+export const subscribeToProfileChanges = (session, callback) => {
+  if (!session || !session.user) throw new Error('Not authenticated');
+
+  return supabase
+    .channel('public:profiles')
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'profiles',
     }, payload => {
       callback(payload);
     })
