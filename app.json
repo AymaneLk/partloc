@@ -24,7 +24,8 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      "expo-secure-store"
     ],
     "entryPoint": "./node_modules/expo/AppEntry.js",
     "updates": {

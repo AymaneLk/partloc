@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import * as SecureStore from 'expo-secure-store';
 import WelcomePage from './components/Welcome';
 import Login from './components/Login';
 import SignUp from './components/SignUp';
@@ -12,7 +13,6 @@ import * as Font from 'expo-font';
 import FriendsList from './components/FriendsList';
 import AddFriend from './components/AddFriend';
 import FriendRequests from './components/FriendRequests';
-import { getInitialSession, setupSessionListener, refreshSession } from './sessionManager';
 import { colors } from './theme';
 import { supabase, updateWatchState } from './supabaseClient';
 import { AppState } from 'react-native';
@@ -45,31 +45,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const subscription = AppState.addEventListener('change', handleAppStateChange);
-
-    // Set initial watch state to true when the app is opened
-    if (session && session.user) {
-      updateWatchState(session.user.id, true).then(result => {
-        if (!result) {
-          console.log('Failed to set initial watch state to true');
-        }
-      });
-    }
-
-    return () => {
-      subscription.remove();
-      // Set watch state to false when the app is closed
-      if (session && session.user) {
-        updateWatchState(session.user.id, false).then(result => {
-          if (!result) {
-            console.log('Failed to set final watch state to false');
-          }
-        });
-      }
-    };
-  }, [handleAppStateChange, session]);
-
-  useEffect(() => {
     async function prepare() {
       try {
         await Font.loadAsync({
@@ -80,9 +55,14 @@ function App() {
         });
         setFontsLoaded(true);
 
-        const initialSession = await getInitialSession();
-        console.log('Initial session:', initialSession);
-        setSession(initialSession);
+        // Retrieve the session from secure storage
+        const storedSession = await SecureStore.getItemAsync('userSession');
+        if (storedSession) {
+          const sessionData = JSON.parse(storedSession);
+          setSession(sessionData);
+          // Set the session in Supabase client
+          supabase.auth.setSession(sessionData);
+        }
       } catch (e) {
         console.warn(e);
       } finally {
@@ -98,8 +78,11 @@ function App() {
       console.log('Auth state changed:', event, currentSession);
       if (event === 'SIGNED_OUT' || event === 'USER_DELETED') {
         setSession(null);
+        await SecureStore.deleteItemAsync('userSession');
       } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
         setSession(currentSession);
+        // Store the session in secure storage
+        await SecureStore.setItemAsync('userSession', JSON.stringify(currentSession));
       }
     });
 
@@ -112,13 +95,17 @@ function App() {
     const refreshInterval = setInterval(async () => {
       if (session) {
         try {
-          const newSession = await refreshSession();
-          if (newSession) {
-            setSession(newSession);
+          const { data, error } = await supabase.auth.refreshSession();
+          if (error) throw error;
+          const { session: refreshedSession } = data;
+          if (refreshedSession) {
+            setSession(refreshedSession);
+            await SecureStore.setItemAsync('userSession', JSON.stringify(refreshedSession));
           } else {
             console.log('Session refresh returned null, signing out');
             await supabase.auth.signOut();
             setSession(null);
+            await SecureStore.deleteItemAsync('userSession');
           }
         } catch (error) {
           console.error('Error refreshing session:', error);
@@ -126,10 +113,11 @@ function App() {
             console.log('Invalid refresh token, signing out');
             await supabase.auth.signOut();
             setSession(null);
+            await SecureStore.deleteItemAsync('userSession');
           }
         }
       }
-    }, 60000);
+    }, 60000); // Refresh every minute
 
     return () => clearInterval(refreshInterval);
   }, [session]);
