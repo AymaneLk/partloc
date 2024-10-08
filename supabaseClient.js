@@ -262,3 +262,98 @@ export const subscribeToProfileChanges = (session, callback) => {
     })
     .subscribe();
 };
+
+// Use updateWatchState consistently
+export const updateWatchState = async (userId, isWatching) => {
+  console.log(`Attempting to update watch state for user ${userId} to ${isWatching}`);
+  
+  // First, check if the user is still authenticated
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  
+  if (authError || !user) {
+    console.log('User is not authenticated, skipping watch state update');
+    return null;
+  }
+
+  // Proceed only if the user is authenticated and the userId matches
+  if (user.id !== userId) {
+    console.log('User ID mismatch, skipping watch state update');
+    return null;
+  }
+
+  // Check if the user profile exists
+  const { data: existingProfile, error: fetchError } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('user_id', userId)
+    .single();
+
+  if (fetchError) {
+    if (fetchError.code === 'PGRST116') {
+      console.log('User profile not found, creating new profile');
+      const { data: newProfile, error: createError } = await supabase
+        .from('profiles')
+        .insert({ 
+          user_id: userId, 
+          full_name: user.email.split('@')[0], 
+          watch_state: isWatching,
+          email: user.email
+        })
+        .select()
+        .single();
+      
+      if (createError) {
+        console.error('Error creating user profile:', createError);
+        return null;
+      }
+      console.log('Created new profile with watch state:', newProfile);
+      return newProfile;
+    } else {
+      console.error('Error fetching user profile:', fetchError);
+      return null;
+    }
+  }
+
+  // If profile exists, update the watch_state
+  const { data, error } = await supabase
+    .from('profiles')
+    .update({ watch_state: isWatching })
+    .eq('user_id', userId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error updating watch state:', error);
+    return null;
+  }
+  console.log('Updated watch state:', data);
+  return data;
+};
+
+// Keep other functions as they are
+export const subscribeToWatchStateChanges = (callback) => {
+  return supabase
+    .channel('public:profiles')
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'profiles',
+      filter: 'watch_state=eq.true OR watch_state=eq.false',
+    }, payload => {
+      console.log('Received watch state update:', payload.new);
+      callback(payload.new);
+    })
+    .subscribe();
+};
+
+export const getInitialProfiles = async () => {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('user_id, full_name, avatar_url, watch_state, email');
+  
+  if (error) {
+    console.error('Error fetching initial profiles:', error);
+    throw error;
+  }
+  return data;
+};

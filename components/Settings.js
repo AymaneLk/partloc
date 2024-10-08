@@ -2,13 +2,16 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { colors } from '../theme';
-import { supabase } from '../supabaseClient';
+import { supabase, updateWatchState } from '../supabaseClient';
 
-const Settings = () => {
+const Settings = ({ session }) => {
   const navigation = useNavigation();
 
   const handleLogout = async () => {
     try {
+      // Set watch state to false before signing out
+      await updateWatchState(session.user.id, false);
+      
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
       // Navigation will be handled by the App component due to auth state change

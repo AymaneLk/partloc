@@ -6,7 +6,15 @@ import { colors } from '../theme';
 import FloatingMenu from './FloatingMenu';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { updateUserLocation, getFriendsLocations, subscribeToFriendsLocations, supabase, subscribeToProfileChanges } from '../supabaseClient';
+import { AppState } from 'react-native';
+import { 
+  updateUserLocation, 
+  getFriendsLocations, 
+  subscribeToFriendsLocations, 
+  updateWatchState,
+  subscribeToWatchStateChanges,
+  getInitialProfiles
+} from '../supabaseClient';
 
 // Import your custom icon images
 import customMarkerIcon from '../assets/location.png';
@@ -72,8 +80,39 @@ function MapComponent({ session }) {
   useEffect(() => {
     let locationSubscription;
     let friendsSubscription;
-    let profileSubscription;
-    let locationUpdateInterval;
+    let watchStateSubscription;
+    let appStateSubscription;
+    let watchStateRefreshInterval;
+
+    const handleAppStateChange = async (nextAppState) => {
+      console.log('App state changed to:', nextAppState);
+      if (nextAppState === 'active') {
+        console.log('Updating watching state to true');
+        const updatedProfile = await updateWatchState(session.user.id, true);
+        setProfiles(prev => ({
+          ...prev,
+          [updatedProfile.user_id]: updatedProfile
+        }));
+      } else if (nextAppState === 'background' || nextAppState === 'inactive') {
+        console.log('Updating watching state to false');
+        await updateWatchState(session.user.id, false);
+      }
+    };
+
+    const refreshWatchStates = async () => {
+      try {
+        const updatedProfiles = await getInitialProfiles();
+        setProfiles(prev => {
+          const updated = { ...prev };
+          updatedProfiles.forEach(profile => {
+            updated[profile.user_id] = { ...updated[profile.user_id], ...profile };
+          });
+          return updated;
+        });
+      } catch (error) {
+        console.error('Error refreshing watch states:', error);
+      }
+    };
 
     (async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
@@ -99,7 +138,7 @@ function MapComponent({ session }) {
       );
 
       await loadFriendsLocations();
-      locationUpdateInterval = setInterval(loadFriendsLocations, 5000);
+      let locationUpdateInterval = setInterval(loadFriendsLocations, 5000);
 
       friendsSubscription = await subscribeToFriendsLocations(session, (payload) => {
         setMapState(prev => {
@@ -126,37 +165,51 @@ function MapComponent({ session }) {
         return { ...prev, friendColors: colors };
       });
 
-      // Subscribe to profile changes
-      profileSubscription = subscribeToProfileChanges(session, (payload) => {
+      // Update watching state to true immediately when the app opens
+      const updatedProfile = await updateWatchState(session.user.id, true);
+      setProfiles(prev => ({
+        ...prev,
+        [updatedProfile.user_id]: updatedProfile
+      }));
+
+      // Fetch initial profiles
+      const initialProfiles = await getInitialProfiles();
+      const profilesObj = initialProfiles.reduce((acc, profile) => {
+        acc[profile.user_id] = profile;
+        return acc;
+      }, {});
+      setProfiles(profilesObj);
+
+      // Subscribe to watching state changes
+      watchStateSubscription = subscribeToWatchStateChanges((updatedProfile) => {
+        console.log('Received watching state update in Map component:', updatedProfile);
         setProfiles(prev => ({
           ...prev,
-          [payload.new.user_id]: payload.new
+          [updatedProfile.user_id]: {
+            ...prev[updatedProfile.user_id],
+            ...updatedProfile
+          }
         }));
       });
 
-      // Initialize profiles
-      const { data: initialProfiles, error } = await supabase
-        .from('profiles')
-        .select('user_id, full_name, avatar_url');
-      
-      if (error) {
-        console.error('Error fetching initial profiles:', error);
-      } else {
-        const profilesObj = initialProfiles.reduce((acc, profile) => {
-          acc[profile.user_id] = profile;
-          return acc;
-        }, {});
-        setProfiles(profilesObj);
-      }
+      // Subscribe to app state changes
+      appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
+
+      // Set up periodic refresh of watching states
+      watchStateRefreshInterval = setInterval(refreshWatchStates, 10000); // Refresh every 10 seconds
     })();
 
     return () => {
       if (locationSubscription) locationSubscription.remove();
       if (friendsSubscription) friendsSubscription.unsubscribe();
-      if (profileSubscription) profileSubscription.unsubscribe();
-      if (locationUpdateInterval) clearInterval(locationUpdateInterval);
+      if (watchStateSubscription) watchStateSubscription.unsubscribe();
+      if (appStateSubscription) appStateSubscription.remove();
+      if (watchStateRefreshInterval) clearInterval(watchStateRefreshInterval);
+      
+      // Update watching state to false when the component unmounts
+      updateWatchState(session.user.id, false);
     };
-  }, [session, loadFriendsLocations]);
+  }, [session]);
 
   useFocusEffect(useCallback(() => {
     loadFriendsLocations();
@@ -218,15 +271,17 @@ function MapComponent({ session }) {
 
   const renderMarker = useCallback((user, isCurrentUser = false) => {
     const { latitude, longitude } = user;
-    let name, avatarUrl;
+    let name, avatarUrl, isWatching;
 
     if (isCurrentUser) {
       name = 'Me';
       avatarUrl = profiles[session.user.id]?.avatar_url;
+      isWatching = profiles[session.user.id]?.watch_state || false;
     } else {
       const profile = profiles[user.user_id];
       name = profile?.full_name || 'Unknown';
       avatarUrl = profile?.avatar_url;
+      isWatching = profile?.watch_state || false;
     }
 
     const initials = getInitials(name);
@@ -234,6 +289,8 @@ function MapComponent({ session }) {
 
     const { status, description } = getLocationStatus(user.timestamp);
     const isOnline = status === 'current';
+
+    console.log(`Rendering marker for user ${user.user_id}, isWatching: ${isWatching}`);
 
     return (
       <Marker
@@ -247,6 +304,21 @@ function MapComponent({ session }) {
             styles.statusDot,
             isOnline ? styles.onlineDot : styles.offlineDot
           ]} />
+          <View style={styles.watchingEye}>
+            {isWatching ? (
+              <Icon
+                name="eye"
+                size={12}
+                color='#4CAF50'
+              />
+            ) : (
+              <Icon
+                name="eye-off"
+                size={12}
+                color='#9E9E9E'
+              />
+            )}
+          </View>
           {avatarUrl ? (
             <Image 
               source={{ uri: avatarUrl }} 
@@ -436,6 +508,15 @@ const styles = StyleSheet.create({
   },
   offlineDot: {
     backgroundColor: '#9E9E9E', // Gray color for offline status
+  },
+  watchingEye: {
+    position: 'absolute',
+    top: -6,
+    left: -6,
+    zIndex: 1,
+    backgroundColor: 'white',
+    borderRadius: 6,
+    padding: 2,
   },
 });
 

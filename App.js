@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { createStackNavigator } from '@react-navigation/stack';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import WelcomePage from './components/Welcome';
 import Login from './components/Login';
 import SignUp from './components/SignUp';
@@ -14,19 +14,64 @@ import AddFriend from './components/AddFriend';
 import FriendRequests from './components/FriendRequests';
 import { getInitialSession, setupSessionListener, refreshSession } from './sessionManager';
 import { colors } from './theme';
-import { supabase } from './supabaseClient';
+import { supabase, updateWatchState } from './supabaseClient';
+import { AppState } from 'react-native';
 
-const Stack = createStackNavigator();
+const Stack = createNativeStackNavigator();
 
 function App() {
   const [session, setSession] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [fontsLoaded, setFontsLoaded] = useState(false);
 
+  const handleAppStateChange = useCallback(async (nextAppState) => {
+    console.log('App state changed:', nextAppState);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      if (nextAppState === 'active') {
+        const result = await updateWatchState(user.id, true);
+        if (!result) {
+          console.log('Failed to update watch state to true');
+        }
+      } else if (nextAppState === 'background' || nextAppState === 'inactive') {
+        const result = await updateWatchState(user.id, false);
+        if (!result) {
+          console.log('Failed to update watch state to false');
+        }
+      }
+    } else {
+      console.log('User is not authenticated, skipping watch state update');
+    }
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    // Set initial watch state to true when the app is opened
+    if (session && session.user) {
+      updateWatchState(session.user.id, true).then(result => {
+        if (!result) {
+          console.log('Failed to set initial watch state to true');
+        }
+      });
+    }
+
+    return () => {
+      subscription.remove();
+      // Set watch state to false when the app is closed
+      if (session && session.user) {
+        updateWatchState(session.user.id, false).then(result => {
+          if (!result) {
+            console.log('Failed to set final watch state to false');
+          }
+        });
+      }
+    };
+  }, [handleAppStateChange, session]);
+
   useEffect(() => {
     async function prepare() {
       try {
-        // Load fonts
         await Font.loadAsync({
           'ClashGrotesk-Bold': require('./Fonts/OTF/ClashGrotesk-Bold.otf'),
           'ClashGrotesk-Medium': require('./Fonts/OTF/ClashGrotesk-Medium.otf'),
@@ -35,7 +80,6 @@ function App() {
         });
         setFontsLoaded(true);
 
-        // Get initial session
         const initialSession = await getInitialSession();
         console.log('Initial session:', initialSession);
         setSession(initialSession);
@@ -67,14 +111,25 @@ function App() {
   useEffect(() => {
     const refreshInterval = setInterval(async () => {
       if (session) {
-        const newSession = await refreshSession();
-        if (newSession) {
-          setSession(newSession);
-        } else {
-          setSession(null);
+        try {
+          const newSession = await refreshSession();
+          if (newSession) {
+            setSession(newSession);
+          } else {
+            console.log('Session refresh returned null, signing out');
+            await supabase.auth.signOut();
+            setSession(null);
+          }
+        } catch (error) {
+          console.error('Error refreshing session:', error);
+          if (error.message.includes('Invalid Refresh Token')) {
+            console.log('Invalid refresh token, signing out');
+            await supabase.auth.signOut();
+            setSession(null);
+          }
         }
       }
-    }, 60000); // Refresh every minute
+    }, 60000);
 
     return () => clearInterval(refreshInterval);
   }, [session]);
