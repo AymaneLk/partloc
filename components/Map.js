@@ -77,12 +77,23 @@ function MapComponent({ session }) {
     }
   }, [session]);
 
+  const updateUserLocationPeriodically = useCallback(async () => {
+    try {
+      let currentLocation = await Location.getCurrentPositionAsync({});
+      setMapState(prev => ({ ...prev, location: currentLocation }));
+      await updateUserLocation(session, currentLocation.coords.latitude, currentLocation.coords.longitude);
+    } catch (error) {
+      console.error('Error updating user location:', error);
+    }
+  }, [session]);
+
   useEffect(() => {
     let locationSubscription;
     let friendsSubscription;
     let watchStateSubscription;
     let appStateSubscription;
     let watchStateRefreshInterval;
+    let locationUpdateInterval;
 
     const handleAppStateChange = async (nextAppState) => {
       console.log('App state changed to:', nextAppState);
@@ -138,7 +149,7 @@ function MapComponent({ session }) {
       );
 
       await loadFriendsLocations();
-      let locationUpdateInterval = setInterval(loadFriendsLocations, 5000);
+      locationUpdateInterval = setInterval(updateUserLocationPeriodically, 5000);
 
       friendsSubscription = await subscribeToFriendsLocations(session, (payload) => {
         setMapState(prev => {
@@ -205,11 +216,12 @@ function MapComponent({ session }) {
       if (watchStateSubscription) watchStateSubscription.unsubscribe();
       if (appStateSubscription) appStateSubscription.remove();
       if (watchStateRefreshInterval) clearInterval(watchStateRefreshInterval);
+      if (locationUpdateInterval) clearInterval(locationUpdateInterval);
       
       // Update watching state to false when the component unmounts
       updateWatchState(session.user.id, false);
     };
-  }, [session]);
+  }, [session, updateUserLocationPeriodically]);
 
   useFocusEffect(useCallback(() => {
     loadFriendsLocations();
@@ -254,17 +266,17 @@ function MapComponent({ session }) {
     const lastUpdated = new Date(timestamp);
     const diffInSeconds = Math.floor((now - lastUpdated) / 1000);
 
-    if (diffInSeconds <= 10) {
+    if (diffInSeconds <= 30) {
       return { status: 'current', description: 'Current location' };
-    } else if (diffInSeconds <= 70) {
-      return { status: 'recent', description: `Updated ${diffInSeconds} seconds ago` };
     } else {
       const minutes = Math.floor(diffInSeconds / 60);
       const hours = Math.floor(minutes / 60);
       if (hours > 0) {
-        return { status: 'stale', description: `Updated ${hours} hour${hours > 1 ? 's' : ''} ago` };
+        return { status: 'stale', description: `Last updated location ${hours} hour${hours > 1 ? 's' : ''} ago` };
+      } else if (minutes > 0) {
+        return { status: 'stale', description: `Last updated location ${minutes} minute${minutes > 1 ? 's' : ''} ago` };
       } else {
-        return { status: 'stale', description: `Updated ${minutes} minute${minutes > 1 ? 's' : ''} ago` };
+        return { status: 'stale', description: `Last updated location ${diffInSeconds} second${diffInSeconds > 1 ? 's' : ''} ago` };
       }
     }
   }, []);
