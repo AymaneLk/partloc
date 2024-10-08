@@ -14,15 +14,23 @@ import FriendsList from './components/FriendsList';
 import AddFriend from './components/AddFriend';
 import FriendRequests from './components/FriendRequests';
 import { colors } from './theme';
-import { supabase, updateWatchState } from './supabaseClient';
+import { supabase, updateWatchState, updateUserLocation } from './supabaseClient';
 import { AppState } from 'react-native';
+import * as Location from 'expo-location';
 
 const Stack = createNativeStackNavigator();
+
+const UPDATE_INTERVAL = 30000; // 30 seconds
+const OFFLINE_THRESHOLD = 40000; // 40 seconds
 
 function App() {
   const [session, setSession] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [fontsLoaded, setFontsLoaded] = useState(false);
+  const [location, setLocation] = useState(null);
+  const [isSharing, setIsSharing] = useState(false);
+  const [lastUpdateTime, setLastUpdateTime] = useState(null);
+  const [onlineStatus, setOnlineStatus] = useState('green');
 
   const handleAppStateChange = useCallback(async (nextAppState) => {
     console.log('App state changed:', nextAppState);
@@ -92,34 +100,45 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const refreshInterval = setInterval(async () => {
-      if (session) {
+    let intervalId;
+    let statusCheckIntervalId;
+
+    const updateLocationInDatabase = async () => {
+      if (session && session.user) {
         try {
-          const { data, error } = await supabase.auth.refreshSession();
-          if (error) throw error;
-          const { session: refreshedSession } = data;
-          if (refreshedSession) {
-            setSession(refreshedSession);
-            await SecureStore.setItemAsync('userSession', JSON.stringify(refreshedSession));
-          } else {
-            console.log('Session refresh returned null, signing out');
-            await supabase.auth.signOut();
-            setSession(null);
-            await SecureStore.deleteItemAsync('userSession');
+          let { status } = await Location.requestForegroundPermissionsAsync();
+          if (status !== 'granted') {
+            console.error('Permission to access location was denied');
+            return;
           }
+
+          let currentLocation = await Location.getCurrentPositionAsync({});
+          
+          await updateUserLocation(session, currentLocation.coords.latitude, currentLocation.coords.longitude);
+
+          setLastUpdateTime(Date.now());
+          setOnlineStatus('green');
+          console.log('Location updated in database');
         } catch (error) {
-          console.error('Error refreshing session:', error);
-          if (error.message.includes('Invalid Refresh Token')) {
-            console.log('Invalid refresh token, signing out');
-            await supabase.auth.signOut();
-            setSession(null);
-            await SecureStore.deleteItemAsync('userSession');
-          }
+          console.error('Error updating location in database:', error);
         }
       }
-    }, 60000); // Refresh every minute
+    };
 
-    return () => clearInterval(refreshInterval);
+    const checkOnlineStatus = () => {
+      if (lastUpdateTime && Date.now() - lastUpdateTime > OFFLINE_THRESHOLD) {
+        setOnlineStatus('gray');
+      }
+    };
+
+    updateLocationInDatabase(); // Initial update
+    intervalId = setInterval(updateLocationInDatabase, UPDATE_INTERVAL);
+    statusCheckIntervalId = setInterval(checkOnlineStatus, 5000); // Check every 5 seconds
+
+    return () => {
+      clearInterval(intervalId);
+      clearInterval(statusCheckIntervalId);
+    };
   }, [session]);
 
   const reloadSession = async () => {
@@ -144,7 +163,7 @@ function App() {
         {session && session.user ? (
           <>
             <Stack.Screen name="Map">
-              {(props) => <MapComponent {...props} session={session} reloadSession={reloadSession} />}
+              {(props) => <MapComponent {...props} session={session} reloadSession={reloadSession} onlineStatus={onlineStatus} />}
             </Stack.Screen>
             <Stack.Screen name="Settings">
               {(props) => <Settings {...props} session={session} />}

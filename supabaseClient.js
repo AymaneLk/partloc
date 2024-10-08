@@ -1,4 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
+import * as Location from 'expo-location';  // Add this import
+import { throttle } from 'lodash';  // Make sure to import throttle from lodash
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -153,26 +155,62 @@ export const getPendingFriendRequests = async () => {
   return data;
 };
 
-// Add these functions to your existing supabaseClient.js file
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const updateUserLocationWithRetry = async (session, latitude, longitude, retries = 3, backoff = 1000) => {
+  try {
+    const { data, error } = await supabase
+      .from('user_locations')
+      .upsert({
+        user_id: session.user.id,
+        latitude,
+        longitude,
+        timestamp: new Date().toISOString(),
+        is_sharing: true
+      }, {
+        onConflict: 'user_id',
+        returning: 'minimal'
+      });
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    if (retries > 0) {
+      console.log(`Retrying update location. Attempts left: ${retries}`);
+      await delay(backoff);
+      return updateUserLocationWithRetry(session, latitude, longitude, retries - 1, backoff * 2);
+    } else {
+      console.error('Error updating location in database after all retries:', error);
+      throw error;
+    }
+  }
+};
 
 export const updateUserLocation = async (session, latitude, longitude) => {
   if (!session || !session.user) throw new Error('Not authenticated');
 
-  const { data, error } = await supabase
-    .from('user_locations')
-    .upsert({
-      user_id: session.user.id,
-      latitude,
-      longitude,
-      timestamp: new Date().toISOString(),
-      is_sharing: true
-    }, {
-      onConflict: 'user_id',
-      returning: 'minimal'
-    });
+  const throttledUpdate = throttle(async () => {
+    try {
+      await updateUserLocationWithRetry(session, latitude, longitude);
+      console.log('Location updated successfully');
+    } catch (error) {
+      console.error('Failed to update location after all retries:', error);
+    }
+  }, 5000, { leading: true, trailing: true });
 
-  if (error) throw error;
-  return data;
+  // Initial update
+  await throttledUpdate();
+
+  // Set up interval for updates
+  const intervalId = setInterval(() => {
+    throttledUpdate();
+  }, 30000);
+
+  // Return a function to clear the interval and cancel any pending throttled calls
+  return () => {
+    clearInterval(intervalId);
+    throttledUpdate.cancel();
+  };
 };
 
 export const getFriendsLocations = async (session) => {
@@ -221,7 +259,7 @@ export const getFriendsLocations = async (session) => {
 };
 
 export const subscribeToFriendsLocations = async (session, callback) => {
-  if (!session || !session.user) throw new Error('Not authenticated');
+  if (!session || !session.user) throw new Error('Not authenticated');supabase
 
   const { data: friendships, error: friendshipsError } = await supabase
     .from('friendships')
