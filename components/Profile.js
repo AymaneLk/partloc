@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Image, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, SafeAreaView, Linking } from 'react-native';
+import { View, Text, Image, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, SafeAreaView, Linking, Platform } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import * as ImagePicker from 'expo-image-picker';
@@ -269,6 +269,7 @@ const styles = StyleSheet.create({
     padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+    marginTop: Platform.OS === 'android' ? 20 : 0,
   },
   backButton: {
     padding: 8,
@@ -289,6 +290,7 @@ const styles = StyleSheet.create({
   profileInfo: {
     alignItems: 'center',
     padding: 20,
+    marginTop: Platform.OS === 'ios' ? 10 : 7,
   },
   profileImage: {
     width: 120,
@@ -371,7 +373,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: 12,
     padding: 12,
-    marginTop: 16,
   },
   addButtonText: {
     fontSize: 16,
@@ -379,15 +380,17 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     fontFamily: 'ClashGrotesk-Semibold',
   },
-  friendsSection: {
-    marginTop: 20,
-  },
   button: {
     backgroundColor: colors.accent,
     padding: 10,
     borderRadius: 5,
     alignItems: 'center',
     marginBottom: 10,
+    width: '90%',
+    alignSelf: 'center',
+    marginVertical: Platform.OS === 'ios' 
+    ? 7
+    : 5
   },
   buttonText: {
     color: colors.text.primary,

@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, FlatList, StyleSheet, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
+import { View, Text, FlatList, StyleSheet, TouchableOpacity, Image, ActivityIndicator, SafeAreaView, Platform } from 'react-native';
 import { getPendingFriendRequests, acceptFriendRequest, rejectFriendRequest } from '../supabaseClient';
 import { colors } from '../theme';
+import Icon from 'react-native-vector-icons/MaterialIcons';
+import { useNavigation } from '@react-navigation/native';
 
 const FriendRequests = ({ session, reloadSession }) => {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
+  const navigation = useNavigation();
 
   useEffect(() => {
     loadRequests();
@@ -79,32 +82,58 @@ const FriendRequests = ({ session, reloadSession }) => {
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Friend Requests</Text>
-      {requests.length > 0 ? (
-        <FlatList
-          data={requests}
-          renderItem={renderRequest}
-          keyExtractor={(item) => item.id.toString()}
-        />
-      ) : (
-        <Text style={styles.noRequestsText}>You have no pending friend requests.</Text>
-      )}
-    </View>
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+            <Icon name="arrow-back" size={24} color={colors.text.primary} />
+          </TouchableOpacity>
+          <Text style={styles.title}>Friend Requests</Text>
+          <View style={styles.placeholderButton} />
+        </View>
+        {requests.length > 0 ? (
+          <FlatList
+            data={requests}
+            renderItem={renderRequest}
+            keyExtractor={(item) => item.id.toString()}
+          />
+        ) : (
+          <Text style={styles.noRequestsText}>You have no pending friend requests.</Text>
+        )}
+      </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
-    padding: 20,
     backgroundColor: colors.background,
   },
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: Platform.OS === 'ios' ? 8 : 50,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  backButton: {
+    padding: 8,
+  },
   title: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: 'bold',
-    marginBottom: 20,
     color: colors.text.primary,
+  },
+  placeholderButton: {
+    width: 40,
   },
   requestItem: {
     flexDirection: 'row',

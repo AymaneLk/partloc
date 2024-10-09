@@ -1,20 +1,21 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Image, Dimensions, SafeAreaView, Alert } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
+import { StyleSheet, View, Text, TouchableOpacity, Image, Dimensions, SafeAreaView, Alert, Platform, Modal, AppState } from 'react-native';
+import MapView, { PROVIDER_DEFAULT, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { colors } from '../theme';
 import FloatingMenu from './FloatingMenu';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { AppState } from 'react-native';
 import { 
   updateUserLocation, 
   getFriendsLocations, 
   subscribeToFriendsLocations, 
-  updateWatchState,
-  subscribeToWatchStateChanges,
+  updateWatchState, 
+  subscribeToWatchStateChanges, 
   getInitialProfiles
 } from '../supabaseClient';
+import { debounce } from 'lodash';
+import { LOCATION_UPDATE_INTERVAL } from '../supabaseClient';
 
 // Import your custom icon images
 import customMarkerIcon from '../assets/location.png';
@@ -52,6 +53,8 @@ const getInitials = (name) => {
     .slice(0, 2);
 };
 
+const OFFLINE_THRESHOLD = 60000; // 1 minute in milliseconds
+
 function MapComponent({ session }) {
   const [mapState, setMapState] = useState({
     location: null,
@@ -64,9 +67,59 @@ function MapComponent({ session }) {
   });
 
   const [profiles, setProfiles] = useState({});
+  const [mapType, setMapType] = useState('standard');
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [lastUpdatedLocation, setLastUpdatedLocation] = useState(null);
+  const [appState, setAppState] = useState(AppState.currentState);
 
   const mapRef = useRef(null);
   const navigation = useNavigation();
+
+  const [mapCamera, setMapCamera] = useState({
+    center: {
+      latitude: 0,
+      longitude: 0,
+    },
+    pitch: 45,
+    altitude: 500,
+    zoom: 15,
+    heading: 0,
+  });
+
+  const changeMapStyle = useCallback(() => {
+    if (Platform.OS === 'ios') {
+      setMapType(prevType => {
+        const types = ['standard', 'satellite', 'hybrid', 'terrain'];
+        const currentIndex = types.indexOf(prevType);
+        const nextIndex = (currentIndex + 1) % types.length;
+        return types[nextIndex];
+      });
+    } else {
+      setMapState(prev => ({
+        ...prev,
+        currentStyleIndex: (prev.currentStyleIndex + 1) % mapStyles.length
+      }));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (mapState.location) {
+      setMapCamera(prevCamera => ({
+        ...prevCamera,
+        center: {
+          latitude: mapState.location.coords.latitude,
+          longitude: mapState.location.coords.longitude,
+        },
+      }));
+    }
+  }, [mapState.location]);
+
+  const onMapReady = useCallback(() => {
+    if (mapRef.current && mapState.location) {
+      mapRef.current.animateCamera(mapCamera, { duration: 1000 });
+    }
+  }, [mapCamera, mapState.location]);
 
   const loadFriendsLocations = useCallback(async () => {
     try {
@@ -81,34 +134,66 @@ function MapComponent({ session }) {
     try {
       let currentLocation = await Location.getCurrentPositionAsync({});
       setMapState(prev => ({ ...prev, location: currentLocation }));
-      await updateUserLocation(session, currentLocation.coords.latitude, currentLocation.coords.longitude);
+
+      // Check if location has changed significantly (e.g., more than 10 meters)
+      const hasLocationChangedSignificantly = !lastUpdatedLocation ||
+        (Math.abs(currentLocation.coords.latitude - lastUpdatedLocation.latitude) > 0.0001 ||
+         Math.abs(currentLocation.coords.longitude - lastUpdatedLocation.longitude) > 0.0001);
+
+      if (hasLocationChangedSignificantly) {
+        await updateUserLocation(session, currentLocation.coords.latitude, currentLocation.coords.longitude);
+        setLastUpdatedLocation({
+          latitude: currentLocation.coords.latitude,
+          longitude: currentLocation.coords.longitude
+        });
+      }
     } catch (error) {
       console.error('Error updating user location:', error);
+      if (error.message.includes('Network request failed')) {
+        Alert.alert(
+          'Network Error',
+          'Unable to update location due to network issues. Please check your internet connection.',
+          [{ text: 'OK' }]
+        );
+      }
     }
-  }, [session]);
+  }, [session, lastUpdatedLocation]);
+
+  const debouncedUpdateLocation = useMemo(
+    () => debounce(updateUserLocationPeriodically, 5000, { leading: true, trailing: false }),
+    [updateUserLocationPeriodically]
+  );
+
+  const handleAppStateChange = useCallback(async (nextAppState) => {
+    console.log('App state changed:', nextAppState);
+    if (nextAppState === 'active' || (nextAppState === 'inactive' && modalVisible)) {
+      const result = await updateWatchState(session.user.id, true);
+      if (!result) {
+        console.log('Failed to update watch state to true');
+      }
+    } else if (nextAppState === 'background' && !modalVisible) {
+      const result = await updateWatchState(session.user.id, false);
+      if (!result) {
+        console.log('Failed to update watch state to false');
+      }
+    }
+    setAppState(nextAppState);
+  }, [session.user.id, modalVisible]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    return () => {
+      subscription.remove();
+    };
+  }, [handleAppStateChange]);
 
   useEffect(() => {
     let locationSubscription;
     let friendsSubscription;
     let watchStateSubscription;
-    let appStateSubscription;
     let watchStateRefreshInterval;
     let locationUpdateInterval;
-
-    const handleAppStateChange = async (nextAppState) => {
-      console.log('App state changed to:', nextAppState);
-      if (nextAppState === 'active') {
-        console.log('Updating watching state to true');
-        const updatedProfile = await updateWatchState(session.user.id, true);
-        setProfiles(prev => ({
-          ...prev,
-          [updatedProfile.user_id]: updatedProfile
-        }));
-      } else if (nextAppState === 'background' || nextAppState === 'inactive') {
-        console.log('Updating watching state to false');
-        await updateWatchState(session.user.id, false);
-      }
-    };
 
     const refreshWatchStates = async () => {
       try {
@@ -132,15 +217,11 @@ function MapComponent({ session }) {
         return;
       }
 
-      let initialLocation = await Location.getCurrentPositionAsync({});
-      setMapState(prev => ({ ...prev, location: initialLocation }));
-      updateUserLocation(session, initialLocation.coords.latitude, initialLocation.coords.longitude);
-
       locationSubscription = await Location.watchPositionAsync(
         {
-          accuracy: Location.Accuracy.High,
+          accuracy: Location.Accuracy.Balanced,
           timeInterval: 5000,
-          distanceInterval: 10,
+          distanceInterval: 5,
         },
         (newLocation) => {
           setMapState(prev => ({ ...prev, location: newLocation }));
@@ -148,8 +229,13 @@ function MapComponent({ session }) {
         }
       );
 
+      // Initial update
+      let initialLocation = await Location.getCurrentPositionAsync({});
+      setMapState(prev => ({ ...prev, location: initialLocation }));
+      updateUserLocation(session, initialLocation.coords.latitude, initialLocation.coords.longitude);
+
       await loadFriendsLocations();
-      locationUpdateInterval = setInterval(updateUserLocationPeriodically, 5000);
+      locationUpdateInterval = setInterval(debouncedUpdateLocation, 30000); // Update every 30 seconds
 
       friendsSubscription = await subscribeToFriendsLocations(session, (payload) => {
         setMapState(prev => {
@@ -203,9 +289,6 @@ function MapComponent({ session }) {
         }));
       });
 
-      // Subscribe to app state changes
-      appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
-
       // Set up periodic refresh of watching states
       watchStateRefreshInterval = setInterval(refreshWatchStates, 10000); // Refresh every 10 seconds
     })();
@@ -214,22 +297,18 @@ function MapComponent({ session }) {
       if (locationSubscription) locationSubscription.remove();
       if (friendsSubscription) friendsSubscription.unsubscribe();
       if (watchStateSubscription) watchStateSubscription.unsubscribe();
-      if (appStateSubscription) appStateSubscription.remove();
       if (watchStateRefreshInterval) clearInterval(watchStateRefreshInterval);
       if (locationUpdateInterval) clearInterval(locationUpdateInterval);
+      debouncedUpdateLocation.cancel(); // Cancel any pending debounced calls
       
       // Update watching state to false when the component unmounts
       updateWatchState(session.user.id, false);
     };
-  }, [session, updateUserLocationPeriodically]);
+  }, [session, debouncedUpdateLocation, loadFriendsLocations]);
 
   useFocusEffect(useCallback(() => {
     loadFriendsLocations();
   }, [loadFriendsLocations]));
-
-  const changeMapStyle = useCallback(() => {
-    setMapState(prev => ({ ...prev, currentStyleIndex: (prev.currentStyleIndex + 1) % mapStyles.length }));
-  }, []);
 
   const centerOnUserLocation = useCallback(async () => {
     if (mapState.location) {
@@ -261,25 +340,52 @@ function MapComponent({ session }) {
     navigation.navigate('Profile');
   }, [navigation]);
 
-  const getLocationStatus = useCallback((timestamp) => {
+  const getLocationStatus = useCallback((user, timestamp) => {
+    if (!timestamp || !user.latitude || !user.longitude) {
+      return { 
+        status: 'offline', 
+        description: 'Cannot locate the user'
+      };
+    }
+
     const now = new Date();
     const lastUpdated = new Date(timestamp);
-    const diffInSeconds = Math.floor((now - lastUpdated) / 1000);
+    const diffInMilliseconds = now - lastUpdated;
 
-    if (diffInSeconds <= 30) {
-      return { status: 'current', description: 'Current location' };
-    } else {
-      const minutes = Math.floor(diffInSeconds / 60);
+    const formatTimeDiff = (milliseconds) => {
+      const seconds = Math.floor(milliseconds / 1000);
+      if (seconds < 60) return `${seconds} second${seconds !== 1 ? 's' : ''}`;
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
       const hours = Math.floor(minutes / 60);
-      if (hours > 0) {
-        return { status: 'stale', description: `Last updated location ${hours} hour${hours > 1 ? 's' : ''} ago` };
-      } else if (minutes > 0) {
-        return { status: 'stale', description: `Last updated location ${minutes} minute${minutes > 1 ? 's' : ''} ago` };
-      } else {
-        return { status: 'stale', description: `Last updated location ${diffInSeconds} second${diffInSeconds > 1 ? 's' : ''} ago` };
-      }
+      return `${hours} hour${hours !== 1 ? 's' : ''}`;
+    };
+
+    const firstName = user && user.full_name ? user.full_name.split(' ')[0] : 'User';
+
+    // Consider the user online if the last update was within the last minute
+    if (diffInMilliseconds <= 60000) { // 1 minute
+      return { 
+        status: 'online', 
+        description: 'Current location'
+      };
+    } else if (diffInMilliseconds <= OFFLINE_THRESHOLD) {
+      return { 
+        status: 'online', 
+        description: `${firstName} is here for ${formatTimeDiff(diffInMilliseconds)}`
+      };
+    } else {
+      return { 
+        status: 'offline', 
+        description: `Last seen ${formatTimeDiff(diffInMilliseconds)} ago`
+      };
     }
   }, []);
+
+  const handleMarkerPress = (user) => {
+    setSelectedUser(user);
+    setModalVisible(true);
+  };
 
   const renderMarker = useCallback((user, isCurrentUser = false) => {
     const { latitude, longitude } = user;
@@ -299,10 +405,12 @@ function MapComponent({ session }) {
     const initials = getInitials(name);
     const backgroundColor = isCurrentUser ? colors.accent : mapState.friendColors[user.user_id] || getRandomLightColor();
 
-    const { status, description } = getLocationStatus(user.timestamp);
-    const isOnline = status === 'current';
+    const { status, description } = getLocationStatus(user, user.timestamp);
+    const isOnline = status === 'online';
 
-    console.log(`Rendering marker for user ${user.user_id}, isWatching: ${isWatching}`);
+    const markerStyle = Platform.OS === 'ios' 
+      ? styles.markerContainer 
+      : [styles.markerContainer, isWatching && styles.androidWatchingMarker];
 
     return (
       <Marker
@@ -310,27 +418,24 @@ function MapComponent({ session }) {
         coordinate={{ latitude, longitude }}
         title={name}
         description={isCurrentUser ? "Your location" : description}
+        onPress={() => !isCurrentUser && handleMarkerPress(user)}
       >
-        <View style={styles.markerContainer}>
-          <View style={[
-            styles.statusDot,
-            isOnline ? styles.onlineDot : styles.offlineDot
-          ]} />
-          <View style={styles.watchingEye}>
-            {isWatching ? (
-              <Icon
-                name="eye"
-                size={12}
-                color='#4CAF50'
-              />
-            ) : (
-              <Icon
-                name="eye-off"
-                size={12}
-                color='#9E9E9E'
-              />
-            )}
-          </View>
+        <View style={markerStyle}>
+          {Platform.OS === 'ios' && (
+            <>
+              <View style={[
+                styles.statusDot,
+                isOnline ? styles.onlineDot : styles.offlineDot
+              ]} />
+              <View style={styles.watchingEye}>
+                <Icon 
+                  name={isWatching ? "eye" : "eye-off"} 
+                  size={12} 
+                  color={isWatching ? '#4CAF50' : '#9E9E9E'}
+                />
+              </View>
+            </>
+          )}
           {avatarUrl ? (
             <Image 
               source={{ uri: avatarUrl }} 
@@ -352,6 +457,52 @@ function MapComponent({ session }) {
     );
   }, [session.user.id, profiles, mapState.friendColors, getLocationStatus]);
 
+  const renderUserDetails = () => {
+    if (!selectedUser) return null;
+
+    const profile = profiles[selectedUser.user_id];
+    const { status, description } = getLocationStatus(selectedUser, selectedUser.timestamp);
+
+    return (
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={modalVisible}
+        onRequestClose={() => {
+          setModalVisible(false);
+          setSelectedUser(null);
+        }}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>{profile?.full_name || 'Unknown'}</Text>
+            <Text style={styles.modalSubtitle}>{description}</Text>
+            <TouchableOpacity 
+              style={styles.closeButton} 
+              onPress={() => {
+                setModalVisible(false);
+                setSelectedUser(null);
+              }}
+            >
+              <Text style={styles.closeButtonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
+
+  useEffect(() => {
+    if (selectedUser && mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude: selectedUser.latitude,
+        longitude: selectedUser.longitude,
+        latitudeDelta: LATITUDE_DELTA / 2,
+        longitudeDelta: LONGITUDE_DELTA / 2,
+      }, 1000);
+    }
+  }, [selectedUser]);
+
   if (!mapState.location) {
     return (
       <View style={styles.loadingContainer}>
@@ -365,19 +516,21 @@ function MapComponent({ session }) {
       <MapView
         ref={mapRef}
         style={styles.map}
-        initialRegion={{
-          latitude: mapState.location?.coords.latitude || 0,
-          longitude: mapState.location?.coords.longitude || 0,
-          latitudeDelta: LATITUDE_DELTA,
-          longitudeDelta: LONGITUDE_DELTA,
-        }}
-        mapType={mapStyles[mapState.currentStyleIndex].style}
+        provider={Platform.OS === 'ios' ? PROVIDER_DEFAULT : PROVIDER_GOOGLE}
+        initialCamera={mapCamera}
+        mapType={Platform.OS === 'ios' ? mapType : mapStyles[mapState.currentStyleIndex].style}
+        showsBuildings={true}
+        pitchEnabled={true}
+        rotateEnabled={true}
+        showsCompass={true}
+        showsScale={true}
+        onMapReady={onMapReady}
       >
         {mapState.location && renderMarker({
           user_id: session.user.id,
           latitude: mapState.location.coords.latitude,
           longitude: mapState.location.coords.longitude,
-          timestamp: new Date().toISOString(), // Always consider current user as online
+          timestamp: new Date().toISOString(),
         }, true)}
         {mapState.friendsLocations.map(friend => renderMarker(friend))}
       </MapView>
@@ -403,6 +556,7 @@ function MapComponent({ session }) {
           <Icon name="settings-outline" size={24} color={colors.white} />
         </TouchableOpacity>
       </SafeAreaView>
+      {renderUserDetails()}
     </View>
   );
 }
@@ -481,11 +635,15 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    overflow: 'visible', // Changed from 'hidden' to 'visible'
+    overflow: 'visible',
     borderWidth: 2,
     borderColor: 'white',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  androidWatchingMarker: {
+    borderColor: '#4CAF50',
+    borderWidth: 3,
   },
   avatarImage: {
     width: '100%',
@@ -513,7 +671,7 @@ const styles = StyleSheet.create({
     right: -6,
     borderWidth: 2,
     borderColor: 'white',
-    zIndex: 1, // Ensure it's above the avatar/initials
+    zIndex: 1,
   },
   onlineDot: {
     backgroundColor: '#4CAF50', // Green color for online status
@@ -529,6 +687,75 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderRadius: 6,
     padding: 2,
+    width: 18,  // Ensure consistent width
+    height: 18, // Ensure consistent height
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  androidStatusContainer: {
+    position: 'absolute',
+    top: -12,
+    right: -12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: 14,
+    padding: 3,
+    zIndex: 1,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  androidStatusDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    marginRight: 5,
+  },
+  androidOnlineDot: {
+    backgroundColor: '#4CAF50',
+  },
+  androidOfflineDot: {
+    backgroundColor: '#9E9E9E',
+  },
+  androidWatchingEye: {
+    backgroundColor: 'transparent',
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    padding: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderTopLeftRadius: 17,
+    borderTopRightRadius: 17,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  modalSubtitle: {
+    fontSize: 16,
+    marginBottom: 20,
+  },
+  closeButton: {
+    backgroundColor: colors.accent,
+    padding: 10,
+    borderRadius: 5,
+  },
+  closeButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
   },
 });
 

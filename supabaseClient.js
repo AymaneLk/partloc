@@ -1,6 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 import * as Location from 'expo-location';  // Add this import
 import { throttle } from 'lodash';  // Make sure to import throttle from lodash
+import NetInfo from '@react-native-community/netinfo';
+import haversine from 'haversine-distance';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -8,6 +10,15 @@ const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 if (!supabaseUrl || !supabaseAnonKey) {
   console.error('Supabase URL or Anon Key is missing. Check your .env file.');
 }
+
+// Add this somewhere in your Supabase client initialization
+NetInfo.configure({
+  reachabilityUrl: 'https://clients3.google.com/generate_204',
+  reachabilityTest: async (response) => response.status === 204,
+  reachabilityLongTimeout: 60 * 1000, // 60s
+  reachabilityShortTimeout: 5 * 1000, // 5s
+  reachabilityRequestTimeout: 15 * 1000, // 15s
+});
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
@@ -157,15 +168,70 @@ export const getPendingFriendRequests = async () => {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const updateUserLocationWithRetry = async (session, latitude, longitude, retries = 3, backoff = 1000) => {
+const LOCATION_UPDATE_INTERVAL = 60000; // 1 minute
+const SIGNIFICANT_DISTANCE = 5; // 5 meters
+
+let lastLocation = null;
+let lastUpdateTime = null;
+let totalTimeAtLocation = 0;
+
+export const updateUserLocation = async (session, latitude, longitude) => {
+  if (!session || !session.user) throw new Error('Not authenticated');
+
+  const currentTime = new Date();
+  const currentLocation = { latitude, longitude };
+
+  const shouldUpdate = () => {
+    if (!lastLocation || !lastUpdateTime) return true;
+    
+    const timeDiff = currentTime - lastUpdateTime;
+    const distance = haversine(lastLocation, currentLocation);
+
+    if (distance <= SIGNIFICANT_DISTANCE) {
+      // User is still at the same location
+      totalTimeAtLocation += timeDiff;
+      return true; // We'll update to reflect the increased time at this location
+    } else {
+      // User has moved to a new location
+      totalTimeAtLocation = 0;
+      return true;
+    }
+  };
+
+  if (shouldUpdate()) {
+    try {
+      const timestamp = new Date().toISOString(); // Use current time for the timestamp
+      await updateUserLocationWithRetry(session, latitude, longitude, timestamp, totalTimeAtLocation);
+      console.log('Location updated successfully');
+      lastLocation = currentLocation;
+      lastUpdateTime = currentTime;
+    } catch (error) {
+      console.error('Failed to update location:', error);
+    }
+  } else {
+    console.log('Location update skipped: No significant change');
+  }
+
+  // Schedule next update
+  setTimeout(() => updateUserLocation(session, latitude, longitude), LOCATION_UPDATE_INTERVAL);
+};
+
+const updateUserLocationWithRetry = async (session, latitude, longitude, timestamp, duration, retries = 3, backoff = 1000) => {
   try {
+    const networkState = await NetInfo.fetch();
+    if (!networkState.isConnected) {
+      console.log('No internet connection. Skipping location update.');
+      return null;
+    }
+
     const { data, error } = await supabase
       .from('user_locations')
       .upsert({
         user_id: session.user.id,
         latitude,
         longitude,
-        timestamp: new Date().toISOString(),
+        timestamp,
+        duration,
         is_sharing: true
       }, {
         onConflict: 'user_id',
@@ -178,39 +244,12 @@ const updateUserLocationWithRetry = async (session, latitude, longitude, retries
     if (retries > 0) {
       console.log(`Retrying update location. Attempts left: ${retries}`);
       await delay(backoff);
-      return updateUserLocationWithRetry(session, latitude, longitude, retries - 1, backoff * 2);
+      return updateUserLocationWithRetry(session, latitude, longitude, timestamp, duration, retries - 1, backoff * 2);
     } else {
       console.error('Error updating location in database after all retries:', error);
       throw error;
     }
   }
-};
-
-export const updateUserLocation = async (session, latitude, longitude) => {
-  if (!session || !session.user) throw new Error('Not authenticated');
-
-  const throttledUpdate = throttle(async () => {
-    try {
-      await updateUserLocationWithRetry(session, latitude, longitude);
-      console.log('Location updated successfully');
-    } catch (error) {
-      console.error('Failed to update location after all retries:', error);
-    }
-  }, 5000, { leading: true, trailing: true });
-
-  // Initial update
-  await throttledUpdate();
-
-  // Set up interval for updates
-  const intervalId = setInterval(() => {
-    throttledUpdate();
-  }, 30000);
-
-  // Return a function to clear the interval and cancel any pending throttled calls
-  return () => {
-    clearInterval(intervalId);
-    throttledUpdate.cancel();
-  };
 };
 
 export const getFriendsLocations = async (session) => {

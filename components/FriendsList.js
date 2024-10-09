@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, FlatList, StyleSheet, Image, SafeAreaView, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, FlatList, StyleSheet, Image, SafeAreaView, ActivityIndicator, RefreshControl, Platform, TouchableOpacity } from 'react-native';
 import { getFriends } from '../supabaseClient';
 import { colors } from '../theme';
+import Icon from 'react-native-vector-icons/MaterialIcons';
+import { useNavigation } from '@react-navigation/native';
 
 const FriendsList = ({ session }) => {
   const [friends, setFriends] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const navigation = useNavigation();
 
   const loadFriends = useCallback(async () => {
     try {
@@ -62,7 +65,16 @@ const FriendsList = ({ session }) => {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <Text style={styles.title}>Friends</Text>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+            <Icon name="arrow-back" size={24} color={colors.text.primary} />
+          </TouchableOpacity>
+          <View style={styles.titleContainer}>
+            <Text style={styles.title}>Friends</Text>
+          </View>
+          <View style={styles.placeholderButton} />
+        </View>
+        <View style={styles.titleUnderline} />
         {friends.length > 0 ? (
           <FlatList
             data={friends}
@@ -88,17 +100,38 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 100, // This will push the content 100px from the top
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: Platform.OS === 'ios' ? 8 : 50,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  backButton: {
+    padding: 8,
+  },
+  titleContainer: {
+    flex: 1,
+    alignItems: 'center',
   },
   title: {
     fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 20,
     color: colors.text.primary,
   },
+  placeholderButton: {
+    width: 40, // Adjust this value to match the width of your back button
+  },
+  titleUnderline: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginHorizontal: 16,
+    marginBottom: 16,
+  },
   listContent: {
-    paddingBottom: 20, // Add some padding at the bottom of the list
+    paddingHorizontal: 16,
   },
   friendItem: {
     flexDirection: 'row',

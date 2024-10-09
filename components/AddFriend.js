@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
-import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert } from 'react-native';
+import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, SafeAreaView, Platform } from 'react-native';
 import { sendFriendRequest } from '../supabaseClient';
 import { colors } from '../theme';
+import Icon from 'react-native-vector-icons/MaterialIcons';
+import { useNavigation } from '@react-navigation/native';
 
 const AddFriend = () => {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
+  const navigation = useNavigation();
 
   const handleAddFriend = async () => {
     setLoading(true);
@@ -34,33 +37,72 @@ const AddFriend = () => {
   };
 
   return (
-    <View style={styles.container}>
-      <TextInput
-        style={styles.input}
-        placeholder="Enter friend's email"
-        value={email}
-        onChangeText={setEmail}
-        keyboardType="email-address"
-        autoCapitalize="none"
-      />
-      <TouchableOpacity style={styles.button} onPress={handleAddFriend} disabled={loading}>
-        <Text style={styles.buttonText}>{loading ? 'Sending...' : 'Send Friend Request'}</Text>
-      </TouchableOpacity>
-    </View>
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+            <Icon name="arrow-back" size={24} color={colors.text.primary} />
+          </TouchableOpacity>
+          <Text style={styles.title}>Add Friend</Text>
+          <View style={styles.placeholderButton} />
+        </View>
+        <View style={styles.content}>
+          <TextInput
+            style={styles.input}
+            placeholder="Enter friend's email"
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+          />
+          <TouchableOpacity style={styles.button} onPress={handleAddFriend} disabled={loading}>
+            <Text style={styles.buttonText}>{loading ? 'Sending...' : 'Send Friend Request'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    marginTop: 50,
-    padding: 20,
+  safeArea: {
+    flex: 1,
     backgroundColor: colors.background,
+  },
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: Platform.OS === 'ios' ? 8 : 50,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  backButton: {
+    padding: 8,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: colors.text.primary,
+  },
+  placeholderButton: {
+    width: 40,
+  },
+  content: {
+    flex: 1,
+    padding: 20,
   },
   input: {
     backgroundColor: colors.surface,
     padding: 10,
     borderRadius: 5,
-    marginBottom: 10,
+    marginBottom: 20,
     color: colors.text.primary,
   },
   button: {
