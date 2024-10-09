@@ -395,33 +395,45 @@ function MapComponent({ session }) {
     setupLocationAndFriends();
 
     const updateBatteryInfo = async () => {
-      const batteryLevel = await Battery.getBatteryLevelAsync();
-      const batteryState = await Battery.getBatteryStateAsync();
-      const isCharging = batteryState === Battery.BatteryState.CHARGING || 
-                         batteryState === Battery.BatteryState.FULL;
-      const level = Math.floor(batteryLevel * 100); // Use Math.floor instead of Math.round
-      
-      console.log('Raw battery level:', batteryLevel, 'Calculated level:', level, 'Charging:', isCharging);
-      
-      if (level !== currentUserBatteryLevel || isCharging !== isCharging) {
-        setCurrentUserBatteryLevel(level);
-        setIsCharging(isCharging);
-        await updateUserBatteryLevel(session, level, isCharging);
+      try {
+        const batteryLevel = await Battery.getBatteryLevelAsync();
+        const batteryState = await Battery.getBatteryStateAsync();
+        const charging = batteryState === Battery.BatteryState.CHARGING || 
+                       batteryState === Battery.BatteryState.FULL;
+        const level = Math.floor(batteryLevel * 100);
+        
+        console.log('Raw battery level:', batteryLevel, 'Calculated level:', level, 'Charging:', charging);
+        
+        if (level !== currentUserBatteryLevel || charging !== isCharging) {
+          setCurrentUserBatteryLevel(level);
+          setIsCharging(charging);
+          await updateUserBatteryLevel(session, level, charging);
+        }
+      } catch (error) {
+        console.error('Error getting battery info:', error);
       }
     };
 
     const setupBatteryMonitoring = async () => {
       await updateBatteryInfo(); // Initial update
 
-      batterySubscription = Battery.addBatteryStateListener(({ batteryLevel, batteryState }) => {
-        updateBatteryInfo(); // Call the full update function on any battery change
-      });
-
-      // Check battery level more frequently on iOS
       if (Platform.OS === 'ios') {
-        batteryCheckInterval = setInterval(updateBatteryInfo, 10000); // Every 10 seconds for iOS
+        // For iOS, use a combination of listeners
+        batterySubscription = Battery.addBatteryLevelListener(({ batteryLevel }) => {
+          updateBatteryInfo();
+        });
+
+        Battery.addBatteryStateListener(({ batteryState }) => {
+          updateBatteryInfo();
+        });
+
+        // Check every 30 seconds on iOS as a fallback
+        batteryCheckInterval = setInterval(updateBatteryInfo, 30000);
       } else {
-        batteryCheckInterval = setInterval(updateBatteryInfo, 30000); // Every 30 seconds for Android
+        // For Android, use the existing listener
+        batterySubscription = Battery.addBatteryStateListener(({ batteryLevel, batteryState }) => {
+          updateBatteryInfo();
+        });
       }
     };
 
@@ -544,7 +556,7 @@ function MapComponent({ session }) {
       name = 'Me';
       avatarUrl = profiles[session.user.id]?.avatar_url;
       isWatching = profiles[session.user.id]?.watch_state || false;
-      batteryLevel = currentUserBatteryLevel;
+      batteryLevel = currentUserBatteryLevel || 0;
       charging = isCharging;
     } else {
       const profile = profiles[user.user_id];
@@ -554,6 +566,9 @@ function MapComponent({ session }) {
       batteryLevel = batteryLevels[user.user_id] || user.battery_level || 0;
       charging = user.is_charging;
     }
+
+    // Ensure batteryLevel is a number
+    batteryLevel = typeof batteryLevel === 'number' ? batteryLevel : 0;
 
     console.log(`Rendering marker for ${name}:`, {
       isCurrentUser,
@@ -625,7 +640,7 @@ function MapComponent({ session }) {
                     size={14} 
                     color="white" 
                   />
-                  <Text style={styles.batteryText}>{Math.floor(batteryLevel)}%</Text>
+                  <Text style={styles.batteryText}>{batteryLevel}%</Text>
                 </View>
               </>
             )}
@@ -641,7 +656,7 @@ function MapComponent({ session }) {
                 size={16} 
                 color="white" 
               />
-              <Text style={styles.calloutBattery}>{Math.floor(batteryLevel)}% {charging ? '(Charging)' : ''}</Text>
+              <Text style={styles.calloutBattery}>{batteryLevel}% {charging ? '(Charging)' : ''}</Text>
             </View>
           </View>
         </Callout>
