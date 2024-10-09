@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, FlatList, StyleSheet, TouchableOpacity, Image, ActivityIndicator, SafeAreaView, Platform } from 'react-native';
+import { View, Text, FlatList, StyleSheet, TouchableOpacity, Image, ActivityIndicator, SafeAreaView, Platform, Alert } from 'react-native';
 import { getPendingFriendRequests, acceptFriendRequest, rejectFriendRequest } from '../supabaseClient';
 import { colors } from '../theme';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useNavigation } from '@react-navigation/native';
 
-const FriendRequests = ({ session, reloadSession }) => {
+const FriendRequests = ({ session }) => {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const navigation = useNavigation();
@@ -21,6 +21,7 @@ const FriendRequests = ({ session, reloadSession }) => {
       setRequests(requestsData);
     } catch (error) {
       console.error('Error loading friend requests:', error);
+      Alert.alert('Error', 'Failed to load friend requests. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -30,11 +31,10 @@ const FriendRequests = ({ session, reloadSession }) => {
     try {
       await acceptFriendRequest(friendshipId);
       await loadRequests();
-      if (reloadSession) {
-        await reloadSession();
-      }
+      Alert.alert('Success', 'Friend request accepted!');
     } catch (error) {
       console.error('Error accepting friend request:', error);
+      Alert.alert('Error', 'Failed to accept friend request. Please try again.');
     }
   };
 
@@ -42,8 +42,10 @@ const FriendRequests = ({ session, reloadSession }) => {
     try {
       await rejectFriendRequest(friendshipId);
       await loadRequests();
+      Alert.alert('Success', 'Friend request rejected.');
     } catch (error) {
       console.error('Error rejecting friend request:', error);
+      Alert.alert('Error', 'Failed to reject friend request. Please try again.');
     }
   };
 
@@ -60,14 +62,15 @@ const FriendRequests = ({ session, reloadSession }) => {
         />
         <View style={styles.requestInfo}>
           <Text style={styles.requestName}>{item.profiles.full_name || 'Unknown User'}</Text>
-          <View style={styles.buttonContainer}>
-            <TouchableOpacity style={styles.acceptButton} onPress={() => handleAccept(item.id)}>
-              <Text style={styles.buttonText}>Accept</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.rejectButton} onPress={() => handleReject(item.id)}>
-              <Text style={styles.buttonText}>Reject</Text>
-            </TouchableOpacity>
-          </View>
+          <Text style={styles.requestEmail}>{item.profiles.email || 'No email provided'}</Text>
+        </View>
+        <View style={styles.buttonContainer}>
+          <TouchableOpacity style={styles.acceptButton} onPress={() => handleAccept(item.id)}>
+            <Icon name="check" size={24} color={colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.rejectButton} onPress={() => handleReject(item.id)}>
+            <Icon name="close" size={24} color={colors.white} />
+          </TouchableOpacity>
         </View>
       </View>
     );
@@ -85,10 +88,13 @@ const FriendRequests = ({ session, reloadSession }) => {
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerButton}>
             <Icon name="arrow-back" size={24} color={colors.text.primary} />
           </TouchableOpacity>
-          <Text style={styles.title}>Friend Requests</Text>
+          <View style={styles.headerTitleContainer}>
+            <Text style={styles.headerTitle}>Friend Requests</Text>
+            <View style={styles.headerUnderline} />
+          </View>
           <View style={styles.placeholderButton} />
         </View>
         {requests.length > 0 ? (
@@ -96,9 +102,13 @@ const FriendRequests = ({ session, reloadSession }) => {
             data={requests}
             renderItem={renderRequest}
             keyExtractor={(item) => item.id.toString()}
+            contentContainerStyle={styles.listContent}
           />
         ) : (
-          <Text style={styles.noRequestsText}>You have no pending friend requests.</Text>
+          <View style={styles.emptyStateContainer}>
+            <Icon name="people-outline" size={64} color={colors.text.secondary} />
+            <Text style={styles.emptyStateText}>You have no pending friend requests.</Text>
+          </View>
         )}
       </View>
     </SafeAreaView>
@@ -118,66 +128,99 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: Platform.OS === 'ios' ? 8 : 50,
+    paddingTop: Platform.OS === 'ios' ? 8 : 16,
     paddingHorizontal: 16,
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    paddingBottom: 16,
+    backgroundColor: colors.background,
   },
-  backButton: {
+  headerButton: {
     padding: 8,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
   },
-  title: {
-    fontSize: 20,
+  headerTitleContainer: {
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 24,
     fontWeight: 'bold',
     color: colors.text.primary,
+    fontFamily: 'ClashGrotesk-Bold',
+  },
+  headerUnderline: {
+    width: 30,
+    height: 3,
+    backgroundColor: colors.error,
+    marginTop: 4,
+    borderRadius: 1.5,
   },
   placeholderButton: {
     width: 40,
   },
+  listContent: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+  },
   requestItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    shadowColor: colors.text.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   avatar: {
     width: 50,
     height: 50,
     borderRadius: 25,
-    marginRight: 10,
+    marginRight: 12,
   },
   requestInfo: {
     flex: 1,
   },
   requestName: {
-    fontSize: 18,
+    fontSize: 16,
+    fontWeight: 'bold',
     color: colors.text.primary,
-    marginBottom: 5,
+    marginBottom: 4,
+    fontFamily: 'ClashGrotesk-Semibold',
+  },
+  requestEmail: {
+    fontSize: 14,
+    color: colors.text.secondary,
+    fontFamily: 'ClashGrotesk-Medium',
   },
   buttonContainer: {
     flexDirection: 'row',
   },
   acceptButton: {
     backgroundColor: colors.accent,
-    padding: 5,
-    borderRadius: 5,
-    marginRight: 10,
+    padding: 8,
+    borderRadius: 20,
+    marginRight: 8,
   },
   rejectButton: {
     backgroundColor: colors.error,
-    padding: 5,
-    borderRadius: 5,
+    padding: 8,
+    borderRadius: 20,
   },
-  buttonText: {
-    color: colors.text.primary,
+  emptyStateContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
   },
-  noRequestsText: {
+  emptyStateText: {
     fontSize: 18,
-    color: colors.text.primary,
+    color: colors.text.secondary,
     textAlign: 'center',
-    marginTop: 20,
+    marginTop: 16,
+    fontFamily: 'ClashGrotesk-Medium',
   },
   loadingContainer: {
     flex: 1,

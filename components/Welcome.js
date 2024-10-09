@@ -16,7 +16,7 @@ export default function WelcomePage() {
   return (
     <View style={styles.container}>
       <Video
-        source={require('../assets/maps_pro.mp4')}
+        source={require('../assets/mapscolored.mp4')}
         style={styles.backgroundVideo}
         resizeMode="cover"
         shouldPlay
@@ -30,7 +30,10 @@ export default function WelcomePage() {
             <Text style={styles.locateText}>locate</Text>
             <Text style={styles.itText}>It</Text>
           </View>
-          <Text style={styles.subtitle}>Stay Connected, Stay Safe.</Text>
+          <View style={styles.logoContainer}>
+            <Text style={styles.subtitle}>Stay Connected,</Text> 
+            <Text style={[styles.subtitle,styles.StaySafeText]}> Stay Safe.</Text>
+          </View>
         </View>
       </View>
       <TouchableOpacity style={styles.startButton} onPress={handleStart}>
@@ -77,7 +80,7 @@ const styles = StyleSheet.create({
   itText: {
     fontSize: 48,
     fontWeight: 'bold',
-    color: colors.accent,
+    color: colors.error,
     fontFamily: 'ClashGrotesk-Bold',
   },
   subtitle: {
@@ -90,7 +93,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 50,
     alignSelf: 'center',
-    backgroundColor: colors.accent,
+    backgroundColor: colors.error,
     paddingVertical: 12,
     paddingHorizontal: 30,
     borderRadius: 25,
@@ -101,4 +104,8 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontFamily: 'ClashGrotesk-Semibold',
   },
+  StaySafeText: {
+    color: colors.error,
+  }
 });
+

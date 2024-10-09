@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, Image, Dimensions, SafeAreaView, Alert, Platform, Modal, AppState } from 'react-native';
-import MapView, { PROVIDER_DEFAULT, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { PROVIDER_DEFAULT, Marker, PROVIDER_GOOGLE, Callout } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { colors } from '../theme';
 import FloatingMenu from './FloatingMenu';
@@ -16,6 +16,7 @@ import {
 } from '../supabaseClient';
 import { debounce } from 'lodash';
 import { LOCATION_UPDATE_INTERVAL } from '../supabaseClient';
+import MaterialIcon from 'react-native-vector-icons/MaterialIcons';
 
 // Import your custom icon images
 import customMarkerIcon from '../assets/location.png';
@@ -64,6 +65,7 @@ function MapComponent({ session }) {
     unavailableFriends: [],
     friendProfiles: {},
     friendColors: {},
+    initialFitDone: false,
   });
 
   const [profiles, setProfiles] = useState({});
@@ -86,6 +88,8 @@ function MapComponent({ session }) {
     zoom: 15,
     heading: 0,
   });
+
+  const [lastTap, setLastTap] = useState(null);
 
   const changeMapStyle = useCallback(() => {
     if (Platform.OS === 'ios') {
@@ -188,6 +192,50 @@ function MapComponent({ session }) {
     };
   }, [handleAppStateChange]);
 
+  const fitMapToMarkers = useCallback((locations) => {
+    if (locations.length === 0) return;
+
+    const latitudes = locations.map(loc => loc.latitude);
+    const longitudes = locations.map(loc => loc.longitude);
+
+    const minLat = Math.min(...latitudes);
+    const maxLat = Math.max(...latitudes);
+    const minLng = Math.min(...longitudes);
+    const maxLng = Math.max(...longitudes);
+
+    const paddingPercentage = 0.25; // Reduced padding for a tighter fit
+
+    const newRegion = {
+      latitude: (minLat + maxLat) / 2,
+      longitude: (minLng + maxLng) / 2,
+      latitudeDelta: (maxLat - minLat) * (1 + paddingPercentage),
+      longitudeDelta: (maxLng - minLng) * (1 + paddingPercentage),
+    };
+
+    // Ensure the aspect ratio is maintained
+    if (newRegion.latitudeDelta > newRegion.longitudeDelta * ASPECT_RATIO) {
+      newRegion.longitudeDelta = newRegion.latitudeDelta / ASPECT_RATIO;
+    } else {
+      newRegion.latitudeDelta = newRegion.longitudeDelta * ASPECT_RATIO;
+    }
+
+    mapRef.current?.animateToRegion(newRegion, 1000);
+  }, []);
+
+  const fitMapToAllMarkers = useCallback(() => {
+    if (mapRef.current && mapState.friendsLocations.length > 0) {
+      const allLocations = [
+        { latitude: mapState.location.coords.latitude, longitude: mapState.location.coords.longitude },
+        ...mapState.friendsLocations.map(friend => ({ latitude: friend.latitude, longitude: friend.longitude }))
+      ];
+
+      mapRef.current.fitToCoordinates(allLocations, {
+        edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+        animated: true,
+      });
+    }
+  }, [mapState.location, mapState.friendsLocations]);
+
   useEffect(() => {
     let locationSubscription;
     let friendsSubscription;
@@ -210,88 +258,106 @@ function MapComponent({ session }) {
       }
     };
 
-    (async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setMapState(prev => ({ ...prev, errorMsg: 'Permission to access location was denied' }));
-        return;
-      }
-
-      locationSubscription = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.Balanced,
-          timeInterval: 5000,
-          distanceInterval: 5,
-        },
-        (newLocation) => {
-          setMapState(prev => ({ ...prev, location: newLocation }));
-          updateUserLocation(session, newLocation.coords.latitude, newLocation.coords.longitude);
+    const setupLocationAndFriends = async () => {
+      try {
+        let { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          setMapState(prev => ({ ...prev, errorMsg: 'Permission to access location was denied' }));
+          return;
         }
-      );
 
-      // Initial update
-      let initialLocation = await Location.getCurrentPositionAsync({});
-      setMapState(prev => ({ ...prev, location: initialLocation }));
-      updateUserLocation(session, initialLocation.coords.latitude, initialLocation.coords.longitude);
+        let currentLocation = await Location.getCurrentPositionAsync({});
+        setMapState(prev => ({ ...prev, location: currentLocation }));
 
-      await loadFriendsLocations();
-      locationUpdateInterval = setInterval(debouncedUpdateLocation, 30000); // Update every 30 seconds
+        const friendsLocations = await getFriendsLocations(session);
+        setMapState(prev => ({ ...prev, friendsLocations }));
 
-      friendsSubscription = await subscribeToFriendsLocations(session, (payload) => {
+        // Combine current user's location with friends' locations
+        const allLocations = [
+          { latitude: currentLocation.coords.latitude, longitude: currentLocation.coords.longitude },
+          ...friendsLocations.map(friend => ({ latitude: friend.latitude, longitude: friend.longitude }))
+        ];
+
+        // Only fit to markers on initial load
+        if (!mapState.initialFitDone) {
+          fitMapToMarkers(allLocations);
+          setMapState(prev => ({ ...prev, initialFitDone: true }));
+        }
+
+        locationSubscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            timeInterval: 5000,
+            distanceInterval: 5,
+          },
+          (newLocation) => {
+            setMapState(prev => ({ ...prev, location: newLocation }));
+            updateUserLocation(session, newLocation.coords.latitude, newLocation.coords.longitude);
+          }
+        );
+
+        locationUpdateInterval = setInterval(debouncedUpdateLocation, 30000); // Update every 30 seconds
+
+        friendsSubscription = await subscribeToFriendsLocations(session, (payload) => {
+          setMapState(prev => {
+            const updatedLocations = prev.friendsLocations.map(loc => 
+              loc.user_id === payload.new.user_id 
+                ? { ...loc, ...payload.new, lastUpdated: new Date().toISOString() }
+                : loc
+            );
+            if (!updatedLocations.some(loc => loc.user_id === payload.new.user_id)) {
+              updatedLocations.push({ ...payload.new, lastUpdated: new Date().toISOString() });
+            }
+            return { ...prev, friendsLocations: updatedLocations };
+          });
+        });
+
+        // Initialize friend colors
         setMapState(prev => {
-          const updatedLocations = prev.friendsLocations.map(loc => 
-            loc.user_id === payload.new.user_id 
-              ? { ...loc, ...payload.new, lastUpdated: new Date().toISOString() }
-              : loc
-          );
-          if (!updatedLocations.some(loc => loc.user_id === payload.new.user_id)) {
-            updatedLocations.push({ ...payload.new, lastUpdated: new Date().toISOString() });
-          }
-          return { ...prev, friendsLocations: updatedLocations };
+          const colors = {};
+          prev.friendsLocations.forEach(friend => {
+            if (!colors[friend.user_id]) {
+              colors[friend.user_id] = getRandomLightColor();
+            }
+          });
+          return { ...prev, friendColors: colors };
         });
-      });
 
-      // Initialize friend colors
-      setMapState(prev => {
-        const colors = {};
-        prev.friendsLocations.forEach(friend => {
-          if (!colors[friend.user_id]) {
-            colors[friend.user_id] = getRandomLightColor();
-          }
-        });
-        return { ...prev, friendColors: colors };
-      });
-
-      // Update watching state to true immediately when the app opens
-      const updatedProfile = await updateWatchState(session.user.id, true);
-      setProfiles(prev => ({
-        ...prev,
-        [updatedProfile.user_id]: updatedProfile
-      }));
-
-      // Fetch initial profiles
-      const initialProfiles = await getInitialProfiles();
-      const profilesObj = initialProfiles.reduce((acc, profile) => {
-        acc[profile.user_id] = profile;
-        return acc;
-      }, {});
-      setProfiles(profilesObj);
-
-      // Subscribe to watching state changes
-      watchStateSubscription = subscribeToWatchStateChanges((updatedProfile) => {
-        console.log('Received watching state update in Map component:', updatedProfile);
+        // Update watching state to true immediately when the app opens
+        const updatedProfile = await updateWatchState(session.user.id, true);
         setProfiles(prev => ({
           ...prev,
-          [updatedProfile.user_id]: {
-            ...prev[updatedProfile.user_id],
-            ...updatedProfile
-          }
+          [updatedProfile.user_id]: updatedProfile
         }));
-      });
 
-      // Set up periodic refresh of watching states
-      watchStateRefreshInterval = setInterval(refreshWatchStates, 10000); // Refresh every 10 seconds
-    })();
+        // Fetch initial profiles
+        const initialProfiles = await getInitialProfiles();
+        const profilesObj = initialProfiles.reduce((acc, profile) => {
+          acc[profile.user_id] = profile;
+          return acc;
+        }, {});
+        setProfiles(profilesObj);
+
+        // Subscribe to watching state changes
+        watchStateSubscription = subscribeToWatchStateChanges((updatedProfile) => {
+          console.log('Received watching state update in Map component:', updatedProfile);
+          setProfiles(prev => ({
+            ...prev,
+            [updatedProfile.user_id]: {
+              ...prev[updatedProfile.user_id],
+              ...updatedProfile
+            }
+          }));
+        });
+
+        // Set up periodic refresh of watching states
+        watchStateRefreshInterval = setInterval(refreshWatchStates, 10000); // Refresh every 10 seconds
+      } catch (error) {
+        console.error('Error setting up location and friends:', error);
+      }
+    };
+
+    setupLocationAndFriends();
 
     return () => {
       if (locationSubscription) locationSubscription.remove();
@@ -304,7 +370,7 @@ function MapComponent({ session }) {
       // Update watching state to false when the component unmounts
       updateWatchState(session.user.id, false);
     };
-  }, [session, debouncedUpdateLocation, loadFriendsLocations]);
+  }, [session, debouncedUpdateLocation, loadFriendsLocations, fitMapToMarkers]);
 
   useFocusEffect(useCallback(() => {
     loadFriendsLocations();
@@ -382,10 +448,22 @@ function MapComponent({ session }) {
     }
   }, []);
 
-  const handleMarkerPress = (user) => {
+  const handleMarkerPress = useCallback((user) => {
+    // Zoom to the user's location
+    if (mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude: user.latitude,
+        longitude: user.longitude,
+        latitudeDelta: LATITUDE_DELTA / 4,
+        longitudeDelta: LONGITUDE_DELTA / 4,
+      }, 1000);
+    }
+  }, []);
+
+  const handleMarkerLongPress = useCallback((user) => {
     setSelectedUser(user);
     setModalVisible(true);
-  };
+  }, []);
 
   const renderMarker = useCallback((user, isCurrentUser = false) => {
     const { latitude, longitude } = user;
@@ -418,46 +496,57 @@ function MapComponent({ session }) {
         coordinate={{ latitude, longitude }}
         title={name}
         description={isCurrentUser ? "Your location" : description}
-        onPress={() => !isCurrentUser && handleMarkerPress(user)}
+        onPress={() => handleMarkerPress(user)}
       >
-        <View style={markerStyle}>
-          {Platform.OS === 'ios' && (
-            <>
-              <View style={[
-                styles.statusDot,
-                isOnline ? styles.onlineDot : styles.offlineDot
-              ]} />
-              <View style={styles.watchingEye}>
-                <Icon 
-                  name={isWatching ? "eye" : "eye-off"} 
-                  size={12} 
-                  color={isWatching ? '#4CAF50' : '#9E9E9E'}
-                />
+        <TouchableOpacity
+          onLongPress={() => !isCurrentUser && handleMarkerLongPress(user)}
+          delayLongPress={500}
+        >
+          <View style={markerStyle}>
+            {Platform.OS === 'ios' && (
+              <>
+                <View style={[
+                  styles.statusDot,
+                  isOnline ? styles.onlineDot : styles.offlineDot
+                ]} />
+                <View style={styles.watchingEye}>
+                  <Icon 
+                    name={isWatching ? "eye" : "eye-off"} 
+                    size={12} 
+                    color={isWatching ? colors.error : '#9E9E9E'}
+                  />
+                </View>
+              </>
+            )}
+            {avatarUrl ? (
+              <Image 
+                source={{ uri: avatarUrl }} 
+                style={styles.avatarImage} 
+                onError={() => {
+                  setProfiles(prev => ({
+                    ...prev,
+                    [user.user_id]: { ...prev[user.user_id], avatar_url: null }
+                  }));
+                }}
+              />
+            ) : (
+              <View style={[styles.initialsContainer, { backgroundColor }]}>
+                <Text style={styles.initialsText}>{initials}</Text>
               </View>
-            </>
-          )}
-          {avatarUrl ? (
-            <Image 
-              source={{ uri: avatarUrl }} 
-              style={styles.avatarImage} 
-              onError={() => {
-                setProfiles(prev => ({
-                  ...prev,
-                  [user.user_id]: { ...prev[user.user_id], avatar_url: null }
-                }));
-              }}
-            />
-          ) : (
-            <View style={[styles.initialsContainer, { backgroundColor }]}>
-              <Text style={styles.initialsText}>{initials}</Text>
-            </View>
-          )}
-        </View>
+            )}
+          </View>
+        </TouchableOpacity>
+        <Callout tooltip>
+          <View style={styles.calloutContainer}>
+            <Text style={styles.calloutName}>{name}</Text>
+            <Text style={styles.calloutDescription}>{description}</Text>
+          </View>
+        </Callout>
       </Marker>
     );
-  }, [session.user.id, profiles, mapState.friendColors, getLocationStatus]);
+  }, [session.user.id, profiles, mapState.friendColors, getLocationStatus, handleMarkerPress, handleMarkerLongPress]);
 
-  const renderUserDetails = () => {
+  const renderUserDetailsModal = () => {
     if (!selectedUser) return null;
 
     const profile = profiles[selectedUser.user_id];
@@ -465,7 +554,7 @@ function MapComponent({ session }) {
 
     return (
       <Modal
-        animationType="slide"
+        animationType="fade"
         transparent={true}
         visible={modalVisible}
         onRequestClose={() => {
@@ -473,21 +562,45 @@ function MapComponent({ session }) {
           setSelectedUser(null);
         }}
       >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>{profile?.full_name || 'Unknown'}</Text>
-            <Text style={styles.modalSubtitle}>{description}</Text>
-            <TouchableOpacity 
-              style={styles.closeButton} 
-              onPress={() => {
-                setModalVisible(false);
-                setSelectedUser(null);
-              }}
-            >
-              <Text style={styles.closeButtonText}>Close</Text>
-            </TouchableOpacity>
+        <TouchableOpacity 
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => {
+            setModalVisible(false);
+            setSelectedUser(null);
+          }}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <Image
+                source={profile?.avatar_url ? { uri: profile.avatar_url } : require('../assets/user.png')}
+                style={styles.modalAvatar}
+              />
+              <Text style={styles.modalName}>{profile?.full_name || 'Unknown'}</Text>
+              <Text style={styles.modalDescription}>{description}</Text>
+              <TouchableOpacity 
+                style={styles.profileButton} 
+                onPress={() => {
+                  setModalVisible(false);
+                  setSelectedUser(null);
+                  navigation.navigate('FriendProfile', { userId: selectedUser.user_id });
+                }}
+              >
+                <Text style={styles.profileButtonText}>Profile</Text>
+                <Icon name="arrow-forward" size={20} color={colors.error} />
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.closeButton} 
+                onPress={() => {
+                  setModalVisible(false);
+                  setSelectedUser(null);
+                }}
+              >
+                <Text style={styles.closeButtonText}>Close</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
+        </TouchableOpacity>
       </Modal>
     );
   };
@@ -517,7 +630,12 @@ function MapComponent({ session }) {
         ref={mapRef}
         style={styles.map}
         provider={Platform.OS === 'ios' ? PROVIDER_DEFAULT : PROVIDER_GOOGLE}
-        initialCamera={mapCamera}
+        initialRegion={{
+          latitude: 0,
+          longitude: 0,
+          latitudeDelta: 90,
+          longitudeDelta: 90,
+        }}
         mapType={Platform.OS === 'ios' ? mapType : mapStyles[mapState.currentStyleIndex].style}
         showsBuildings={true}
         pitchEnabled={true}
@@ -525,6 +643,8 @@ function MapComponent({ session }) {
         showsCompass={true}
         showsScale={true}
         onMapReady={onMapReady}
+        zoomEnabled={true}
+        scrollEnabled={true}
       >
         {mapState.location && renderMarker({
           user_id: session.user.id,
@@ -544,10 +664,31 @@ function MapComponent({ session }) {
           <Image source={mapStyleIcon} style={styles.iconImage} />
         </TouchableOpacity>
         <TouchableOpacity 
-          style={[styles.iconButton, styles.locationMarokerIcon]} 
+          style={styles.iconButton} 
           onPress={centerOnUserLocation}
         >
           <Image source={locationIcon} style={styles.iconImage} />
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={styles.iconButton} 
+          onPress={() => {
+            try {
+              fitMapToAllMarkers();
+            } catch (error) {
+              console.error('Error fitting map to markers:', error);
+              // Fallback to a simpler zoom out method
+              if (mapRef.current) {
+                mapRef.current.animateToRegion({
+                  latitude: mapState.location.coords.latitude,
+                  longitude: mapState.location.coords.longitude,
+                  latitudeDelta: 0.5,
+                  longitudeDelta: 0.5,
+                }, 1000);
+              }
+            }
+          }}
+        >
+          <MaterialIcon name="zoom-out-map" size={24} color={colors.white} />
         </TouchableOpacity>
         <TouchableOpacity 
           style={styles.settingsButton} 
@@ -556,7 +697,7 @@ function MapComponent({ session }) {
           <Icon name="settings-outline" size={24} color={colors.white} />
         </TouchableOpacity>
       </SafeAreaView>
-      {renderUserDetails()}
+      {renderUserDetailsModal()}
     </View>
   );
 }
@@ -579,7 +720,7 @@ const styles = StyleSheet.create({
     height: 40,
   },
   iconButton: {
-    backgroundColor: colors.accent,
+    backgroundColor: colors.error,
     borderRadius: 30,
     padding: 10,
     marginBottom: 10,
@@ -601,13 +742,13 @@ const styles = StyleSheet.create({
   },
   topRightOverlay: {
     position: 'absolute',
-    top: 100,
+    top: 50,
     right: 10,
     alignItems: 'flex-end',
   },
   settingsButton: {
     padding: 10,
-    backgroundColor: colors.accent,
+    backgroundColor: colors.error,
     borderRadius: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -726,36 +867,85 @@ const styles = StyleSheet.create({
   androidWatchingEye: {
     backgroundColor: 'transparent',
   },
-  modalContainer: {
+  modalOverlay: {
     flex: 1,
-    justifyContent: 'flex-end',
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    padding: 22,
     justifyContent: 'center',
     alignItems: 'center',
-    borderTopLeftRadius: 17,
-    borderTopRightRadius: 17,
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
+  modalContainer: {
+    backgroundColor: colors.error, // This will make the modal orange
+    borderRadius: 15,
+    padding: 20,
+    alignItems: 'center',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  modalContent: {
+    alignItems: 'center',
+  },
+  modalAvatar: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     marginBottom: 10,
   },
-  modalSubtitle: {
-    fontSize: 16,
-    marginBottom: 20,
+  modalName: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: colors.white,
+    marginBottom: 5,
+  },
+  modalDescription: {
+    fontSize: 14,
+    color: colors.white,
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  profileButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.white,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    marginBottom: 10,
+  },
+  profileButtonText: {
+    color: colors.error,
+    fontWeight: 'bold',
+    marginRight: 5,
   },
   closeButton: {
-    backgroundColor: colors.accent,
-    padding: 10,
-    borderRadius: 5,
+    backgroundColor: colors.white,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    marginBottom: 10,
   },
   closeButtonText: {
+    color: colors.error,
+    fontWeight: 'bold',
+  },
+  calloutContainer: {
+    width: 100,
+    backgroundColor: colors.error,
+    padding: 10,
+    borderRadius: 30,
+    alignItems: 'center',
+  },
+  calloutName: {
     color: 'white',
     fontWeight: 'bold',
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  calloutDescription: {
+    color: 'white',
+    fontSize: 8,
   },
 });
 

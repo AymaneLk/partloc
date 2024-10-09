@@ -212,7 +212,7 @@ const styles = StyleSheet.create({
   welcomeText: {
     fontFamily: 'ClashGrotesk-Bold',
     fontSize: 32,
-    color: colors.primary,
+    color: colors.error,
     marginBottom: 10,
   },
   subtitle: {
@@ -249,17 +249,17 @@ const styles = StyleSheet.create({
   },
   dropDownPicker: {
     backgroundColor: colors.surface,
-    borderColor: colors.primary,
+    borderColor: colors.error,
     height: 50,
   },
   dropDownContainer: {
     backgroundColor: colors.surface,
-    borderColor: colors.primary,
+    borderColor: colors.error,
   },
   signUpButton: {
     width: '100%',
     height: 50,
-    backgroundColor: colors.accent,
+    backgroundColor: colors.error,
     borderRadius: 30,
     justifyContent: 'center',
     alignItems: 'center',
@@ -267,14 +267,14 @@ const styles = StyleSheet.create({
     zIndex: 1,
   },
   signUpButtonText: {
-    color: colors.background,
+    color: colors.white,
     fontSize: 16,
     fontFamily: 'ClashGrotesk-Semibold',
   },
   loginText: {
     fontFamily: 'ClashGrotesk-Medium',
     fontSize: 14,
-    color: colors.primary,
+    color: colors.error,
     marginTop: 20,
   },
 });

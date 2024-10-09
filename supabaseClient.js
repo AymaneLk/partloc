@@ -176,7 +176,19 @@ let lastUpdateTime = null;
 let totalTimeAtLocation = 0;
 
 export const updateUserLocation = async (session, latitude, longitude) => {
-  if (!session || !session.user) throw new Error('Not authenticated');
+  let userId;
+  if (session && session.user) {
+    userId = session.user.id;
+  } else {
+    // If no session, try to get the user ID from storage
+    const { data } = await supabase.auth.getSession();
+    userId = data.session?.user.id;
+  }
+
+  if (!userId) {
+    console.log('No user ID available, skipping location update');
+    return;
+  }
 
   const currentTime = new Date();
   const currentLocation = { latitude, longitude };
@@ -344,67 +356,22 @@ export const subscribeToProfileChanges = (session, callback) => {
 export const updateWatchState = async (userId, isWatching) => {
   console.log(`Attempting to update watch state for user ${userId} to ${isWatching}`);
   
-  // First, check if the user is still authenticated
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  
-  if (authError || !user) {
-    console.log('User is not authenticated, skipping watch state update');
-    return null;
-  }
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({ watch_state: isWatching })
+      .eq('user_id', userId)
+      .select()
+      .single();
 
-  // Proceed only if the user is authenticated and the userId matches
-  if (user.id !== userId) {
-    console.log('User ID mismatch, skipping watch state update');
-    return null;
-  }
-
-  // Check if the user profile exists
-  const { data: existingProfile, error: fetchError } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('user_id', userId)
-    .single();
-
-  if (fetchError) {
-    if (fetchError.code === 'PGRST116') {
-      console.log('User profile not found, creating new profile');
-      const { data: newProfile, error: createError } = await supabase
-        .from('profiles')
-        .insert({ 
-          user_id: userId, 
-          full_name: user.email.split('@')[0], 
-          watch_state: isWatching,
-          email: user.email
-        })
-        .select()
-        .single();
-      
-      if (createError) {
-        console.error('Error creating user profile:', createError);
-        return null;
-      }
-      console.log('Created new profile with watch state:', newProfile);
-      return newProfile;
-    } else {
-      console.error('Error fetching user profile:', fetchError);
-      return null;
-    }
-  }
-
-  // If profile exists, update the watch_state
-  const { data, error } = await supabase
-    .from('profiles')
-    .update({ watch_state: isWatching })
-    .eq('user_id', userId)
-    .select()
-    .single();
-
-  if (error) {
+    if (error) throw error;
+    
+    console.log('Updated watch state:', data);
+    return data;
+  } catch (error) {
     console.error('Error updating watch state:', error);
     return null;
   }
-  console.log('Updated watch state:', data);
-  return data;
 };
 
 // Keep other functions as they are
@@ -432,5 +399,18 @@ export const getInitialProfiles = async () => {
     console.error('Error fetching initial profiles:', error);
     throw error;
   }
+  return data;
+};
+
+export const deleteFriendship = async (session, friendId) => {
+  if (!session || !session.user) throw new Error('Not authenticated');
+
+  const { data, error } = await supabase
+    .from('friendships')
+    .delete()
+    .or(`and(user_id.eq.${session.user.id},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${session.user.id})`)
+    .eq('status', 'accepted');
+
+  if (error) throw error;
   return data;
 };

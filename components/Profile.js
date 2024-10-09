@@ -17,42 +17,40 @@ const Profile = ({ session }) => {
   const [isSharing, setIsSharing] = useState(false);
 
   useEffect(() => {
-    fetchUserProfile();
-    fetchEmergencyContacts();
-  }, []);
+    if (session && session.user) {
+      fetchUserProfile();
+      fetchEmergencyContacts();
+    }
+  }, [session]);
 
   const fetchUserProfile = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
+    try {
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
-        .eq('user_id', user.id)
+        .eq('user_id', session.user.id)
         .single();
 
-      if (error) {
-        console.error('Error fetching user profile:', error);
-      } else {
-        console.log('Fetched user profile:', data);
-        console.log('Avatar URL:', data.avatar_url);
-        setUser(data);
-      }
+      if (error) throw error;
+      setUser(data);
+    } catch (error) {
+      console.error('Error fetching user profile:', error);
+      Alert.alert('Error', 'Failed to load user profile');
     }
   };
 
   const fetchEmergencyContacts = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
+    try {
       const { data, error } = await supabase
         .from('emergency_contacts')
         .select('*')
-        .eq('user_id', user.id);
+        .eq('user_id', session.user.id);
 
-      if (error) {
-        console.error('Error fetching emergency contacts:', error);
-      } else {
-        setEmergencyContacts(data);
-      }
+      if (error) throw error;
+      setEmergencyContacts(data);
+    } catch (error) {
+      console.error('Error fetching emergency contacts:', error);
+      Alert.alert('Error', 'Failed to load emergency contacts');
     }
   };
 
@@ -170,35 +168,74 @@ const Profile = ({ session }) => {
     }
   };
 
+  const deleteProfilePicture = async () => {
+    Alert.alert(
+      "Delete Profile Picture",
+      "Are you sure you want to delete your profile picture?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const { error } = await supabase
+                .from('profiles')
+                .update({ avatar_url: null })
+                .eq('user_id', user.user_id);
+
+              if (error) throw error;
+
+              setUser({ ...user, avatar_url: null });
+              Alert.alert('Success', 'Profile picture deleted successfully');
+            } catch (error) {
+              console.error('Error deleting profile picture:', error);
+              Alert.alert('Error', 'Failed to delete profile picture');
+            }
+          }
+        }
+      ]
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerButton}>
           <Icon name="arrow-back" size={24} color={colors.text.primary} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Profile</Text>
-        <TouchableOpacity onPress={() => navigation.navigate('EditProfile')} style={styles.editButton}>
-          <Icon name="edit" size={24} color={colors.text.primary} />
+        <View style={styles.headerTitleContainer}>
+          <Text style={styles.headerTitle}>Profile</Text>
+          <View style={styles.headerUnderline} />
+        </View>
+        <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.headerButton}>
+          <Icon name="settings" size={24} color={colors.text.primary} />
         </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.profileInfo}>
-          <TouchableOpacity onPress={pickImage}>
-            <Image
-              source={user?.avatar_url ? { uri: user.avatar_url } : require('../assets/user.png')}
-              style={styles.profileImage}
-              onError={(e) => {
-                console.error('Image load error:', e.nativeEvent.error);
-                // Fallback to default image on error
-                setUser(prevUser => ({...prevUser, avatar_url: null}));
-              }}
-              onLoad={() => console.log('Image loaded successfully')}
-            />
-            <View style={styles.cameraIconContainer}>
-              <Icon name="camera-alt" size={20} color={colors.white} />
-            </View>
-          </TouchableOpacity>
+        <View style={styles.profileCard}>
+          <View style={styles.profileImageContainer}>
+            <TouchableOpacity onPress={pickImage}>
+              <Image
+                source={user?.avatar_url ? { uri: user.avatar_url } : require('../assets/user.png')}
+                style={styles.profileImage}
+                onError={(e) => {
+                  console.error('Image load error:', e.nativeEvent.error);
+                  setUser(prevUser => ({...prevUser, avatar_url: null}));
+                }}
+                onLoad={() => console.log('Image loaded successfully')}
+              />
+              <View style={styles.cameraIconContainer}>
+                <Icon name="camera-alt" size={20} color={colors.white} />
+              </View>
+            </TouchableOpacity>
+            {user?.avatar_url && (
+              <TouchableOpacity style={styles.deleteIconContainer} onPress={deleteProfilePicture}>
+                <Icon name="delete" size={20} color={colors.error} />
+              </TouchableOpacity>
+            )}
+          </View>
           <Text style={styles.name}>{user?.full_name || 'User Name'}</Text>
           <Text style={styles.email}>{user?.email || 'email@example.com'}</Text>
           <Text style={styles.phone}>{user?.phone || 'Phone number not set'}</Text>
@@ -216,7 +253,7 @@ const Profile = ({ session }) => {
           </View>
           {emergencyContacts.map((contact, index) => (
             <View key={index} style={styles.contactItem}>
-              <Icon name="person" size={24} color={colors.text.secondary} style={styles.contactIcon} />
+              <Icon name="person" size={24} color={colors.white} style={styles.contactIcon} />
               <View style={styles.contactInfo}>
                 <Text style={styles.contactName}>{contact.name}</Text>
                 <Text style={styles.contactPhone}>{contact.phone}</Text>
@@ -224,32 +261,23 @@ const Profile = ({ session }) => {
             </View>
           ))}
           <TouchableOpacity style={styles.addButton} onPress={addEmergencyContact}>
-            <Icon name="add-circle" size={24} color={colors.accent} />
+            <Icon name="add-circle" size={24} color={colors.white} />
             <Text style={styles.addButtonText}>Add Emergency Contact</Text>
           </TouchableOpacity>
         </View>
 
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Share Location</Text>
-            <Switch
-              value={isSharing}
-              onValueChange={toggleLocationSharing}
-              trackColor={{ false: colors.border, true: colors.accent }}
-              thumbColor={isSharing ? colors.primary : colors.surface}
-            />
-          </View>
-        </View>
-
-        <View style={styles.friendsSection}>
-          <TouchableOpacity style={styles.button} onPress={() => navigation.navigate('FriendsList')}>
-            <Text style={styles.buttonText}>View Friends</Text>
+        <View style={styles.actionButtons}>
+          <TouchableOpacity style={styles.actionButton} onPress={() => navigation.navigate('FriendsList')}>
+            <Icon name="people" size={28} color={colors.white} />
+            <Text style={styles.actionButtonText}>Friends</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.button} onPress={() => navigation.navigate('AddFriend')}>
-            <Text style={styles.buttonText}>Add Friend</Text>
+          <TouchableOpacity style={styles.actionButton} onPress={() => navigation.navigate('AddFriend')}>
+            <Icon name="person-add" size={28} color={colors.white} />
+            <Text style={styles.actionButtonText}>Add Friend</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.button} onPress={() => navigation.navigate('FriendRequests')}>
-            <Text style={styles.buttonText}>Friend Requests</Text>
+          <TouchableOpacity style={styles.actionButton} onPress={() => navigation.navigate('FriendRequests')}>
+            <Icon name="notifications" size={28} color={colors.white} />
+            <Text style={styles.actionButtonText}>Requests</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -267,44 +295,75 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
     marginTop: Platform.OS === 'android' ? 20 : 0,
+    backgroundColor: colors.background,
   },
-  backButton: {
+  headerButton: {
     padding: 8,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+  },
+  headerTitleContainer: {
+    alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: 'bold',
     color: colors.text.primary,
     fontFamily: 'ClashGrotesk-Bold',
   },
-  editButton: {
-    padding: 8,
+  headerUnderline: {
+    width: 30,
+    height: 3,
+    backgroundColor: colors.error,
+    marginTop: 4,
+    borderRadius: 1.5,
   },
   scrollContent: {
     flexGrow: 1,
     paddingBottom: 20,
   },
-  profileInfo: {
+  profileCard: {
     alignItems: 'center',
     padding: 20,
-    marginTop: Platform.OS === 'ios' ? 10 : 7,
+    marginTop: 20,
+    marginHorizontal: 16,
+    backgroundColor: colors.surface,
+    borderRadius: 20,
+    shadowColor: colors.text.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  profileImageContainer: {
+    position: 'relative',
+    marginBottom: 16,
   },
   profileImage: {
     width: 120,
     height: 120,
     borderRadius: 60,
-    marginBottom: 16,
+    borderWidth: 3,
+    borderColor: colors.error,
   },
   cameraIconContainer: {
     position: 'absolute',
     right: 0,
-    bottom: 16,
-    backgroundColor: colors.accent,
+    bottom: 0,
+    backgroundColor: colors.error,
     borderRadius: 15,
     padding: 5,
+  },
+  deleteIconContainer: {
+    position: 'absolute',
+    left: 0,
+    bottom: 0,
+    backgroundColor: colors.white,
+    borderRadius: 15,
+    padding: 5,
+    borderWidth: 1,
+    borderColor: colors.error,
   },
   name: {
     fontSize: 24,
@@ -326,8 +385,15 @@ const styles = StyleSheet.create({
   },
   section: {
     padding: 16,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
+    marginTop: 20,
+    marginHorizontal: 16,
+    backgroundColor: colors.surface,
+    borderRadius: 20,
+    shadowColor: colors.text.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -344,7 +410,7 @@ const styles = StyleSheet.create({
   contactItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
+    backgroundColor: colors.error,
     borderRadius: 12,
     padding: 12,
     marginBottom: 12,
@@ -358,43 +424,48 @@ const styles = StyleSheet.create({
   contactName: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: colors.text.primary,
+    color: colors.white,
     fontFamily: 'ClashGrotesk-Semibold',
   },
   contactPhone: {
     fontSize: 14,
-    color: colors.text.secondary,
+    color: colors.white,
     fontFamily: 'ClashGrotesk-Medium',
   },
   addButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.surface,
+    backgroundColor: colors.error,
     borderRadius: 12,
     padding: 12,
   },
   addButtonText: {
     fontSize: 16,
-    color: colors.accent,
+    color: colors.white,
     marginLeft: 8,
     fontFamily: 'ClashGrotesk-Semibold',
   },
-  button: {
-    backgroundColor: colors.accent,
-    padding: 10,
-    borderRadius: 5,
-    alignItems: 'center',
-    marginBottom: 10,
-    width: '90%',
-    alignSelf: 'center',
-    marginVertical: Platform.OS === 'ios' 
-    ? 7
-    : 5
+  actionButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 20,
+    marginHorizontal: 16,
   },
-  buttonText: {
-    color: colors.text.primary,
-    fontWeight: 'bold',
+  actionButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.error,
+    borderRadius: 20,
+    padding: 16,
+    width: '30%',
+    aspectRatio: 1,
+  },
+  actionButtonText: {
+    fontSize: 14,
+    color: colors.white,
+    fontFamily: 'ClashGrotesk-Semibold',
+    marginTop: 8,
   },
 });
 
