@@ -396,11 +396,18 @@ function MapComponent({ session }) {
 
     const updateBatteryInfo = async () => {
       try {
-        const batteryLevel = await Battery.getBatteryLevelAsync();
+        let batteryLevel;
+        if (Platform.OS === 'ios') {
+          // For iOS, use the device API directly
+          batteryLevel = await Battery.getBatteryLevelAsync();
+        } else {
+          // For Android, continue using the existing method
+          batteryLevel = await Battery.getBatteryLevelAsync();
+        }
         const batteryState = await Battery.getBatteryStateAsync();
         const charging = batteryState === Battery.BatteryState.CHARGING || 
                        batteryState === Battery.BatteryState.FULL;
-        const level = Math.floor(batteryLevel * 100);
+        const level = Math.round(batteryLevel * 100);
         
         console.log('Raw battery level:', batteryLevel, 'Calculated level:', level, 'Charging:', charging);
         
@@ -418,17 +425,8 @@ function MapComponent({ session }) {
       await updateBatteryInfo(); // Initial update
 
       if (Platform.OS === 'ios') {
-        // For iOS, use a combination of listeners
-        batterySubscription = Battery.addBatteryLevelListener(({ batteryLevel }) => {
-          updateBatteryInfo();
-        });
-
-        Battery.addBatteryStateListener(({ batteryState }) => {
-          updateBatteryInfo();
-        });
-
-        // Check every 30 seconds on iOS as a fallback
-        batteryCheckInterval = setInterval(updateBatteryInfo, 30000);
+        // For iOS, use a timer to check battery level periodically
+        batteryCheckInterval = setInterval(updateBatteryInfo, 60000); // Check every minute
       } else {
         // For Android, use the existing listener
         batterySubscription = Battery.addBatteryStateListener(({ batteryLevel, batteryState }) => {
@@ -567,8 +565,8 @@ function MapComponent({ session }) {
       charging = user.is_charging;
     }
 
-    // Ensure batteryLevel is a number
-    batteryLevel = typeof batteryLevel === 'number' ? batteryLevel : 0;
+    // Ensure batteryLevel is a valid number between 0 and 100
+    batteryLevel = Math.max(0, Math.min(100, batteryLevel));
 
     console.log(`Rendering marker for ${name}:`, {
       isCurrentUser,
