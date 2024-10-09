@@ -3,6 +3,7 @@ import * as Location from 'expo-location';  // Add this import
 import { throttle } from 'lodash';  // Make sure to import throttle from lodash
 import NetInfo from '@react-native-community/netinfo';
 import haversine from 'haversine-distance';
+import * as Battery from 'expo-battery';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -212,13 +213,19 @@ export const updateUserLocation = async (session, latitude, longitude) => {
 
   if (shouldUpdate()) {
     try {
-      const timestamp = new Date().toISOString(); // Use current time for the timestamp
-      await updateUserLocationWithRetry(session, latitude, longitude, timestamp, totalTimeAtLocation);
-      console.log('Location updated successfully');
+      const timestamp = new Date().toISOString();
+      const batteryLevel = await Battery.getBatteryLevelAsync();
+      const batteryState = await Battery.getBatteryStateAsync();
+      const isCharging = batteryState === Battery.BatteryState.CHARGING || 
+                         batteryState === Battery.BatteryState.FULL;
+      const roundedBatteryLevel = Math.round(batteryLevel * 100);
+      console.log('Updating location with battery level:', roundedBatteryLevel, 'Charging:', isCharging);
+      await updateUserLocationWithRetry(session, latitude, longitude, timestamp, totalTimeAtLocation, roundedBatteryLevel, isCharging);
+      console.log('Location and battery info updated successfully');
       lastLocation = currentLocation;
       lastUpdateTime = currentTime;
     } catch (error) {
-      console.error('Failed to update location:', error);
+      console.error('Failed to update location and battery info:', error);
     }
   } else {
     console.log('Location update skipped: No significant change');
@@ -228,7 +235,7 @@ export const updateUserLocation = async (session, latitude, longitude) => {
   setTimeout(() => updateUserLocation(session, latitude, longitude), LOCATION_UPDATE_INTERVAL);
 };
 
-const updateUserLocationWithRetry = async (session, latitude, longitude, timestamp, duration, retries = 3, backoff = 1000) => {
+const updateUserLocationWithRetry = async (session, latitude, longitude, timestamp, duration, batteryLevel, isCharging, retries = 3, backoff = 1000) => {
   try {
     const networkState = await NetInfo.fetch();
     if (!networkState.isConnected) {
@@ -244,7 +251,9 @@ const updateUserLocationWithRetry = async (session, latitude, longitude, timesta
         longitude,
         timestamp,
         duration,
-        is_sharing: true
+        is_sharing: true,
+        battery_level: batteryLevel,
+        is_charging: isCharging
       }, {
         onConflict: 'user_id',
         returning: 'minimal'
@@ -256,7 +265,7 @@ const updateUserLocationWithRetry = async (session, latitude, longitude, timesta
     if (retries > 0) {
       console.log(`Retrying update location. Attempts left: ${retries}`);
       await delay(backoff);
-      return updateUserLocationWithRetry(session, latitude, longitude, timestamp, duration, retries - 1, backoff * 2);
+      return updateUserLocationWithRetry(session, latitude, longitude, timestamp, duration, batteryLevel, isCharging, retries - 1, backoff * 2);
     } else {
       console.error('Error updating location in database after all retries:', error);
       throw error;
@@ -295,6 +304,8 @@ export const getFriendsLocations = async (session) => {
       longitude,
       timestamp,
       is_sharing,
+      battery_level,
+      is_charging,
       profiles:profiles!inner(user_id, full_name, avatar_url)
     `)
     .in('user_id', friendIds)
@@ -310,7 +321,7 @@ export const getFriendsLocations = async (session) => {
 };
 
 export const subscribeToFriendsLocations = async (session, callback) => {
-  if (!session || !session.user) throw new Error('Not authenticated');supabase
+  if (!session || !session.user) throw new Error('Not authenticated');
 
   const { data: friendships, error: friendshipsError } = await supabase
     .from('friendships')
@@ -328,8 +339,9 @@ export const subscribeToFriendsLocations = async (session, callback) => {
       event: '*',
       schema: 'public',
       table: 'user_locations',
-      filter: `user_id=in.(${friendIds.join(',')})`
+      filter: `user_id=in.(${friendIds.join(',')})`,
     }, payload => {
+      console.log('Friend location update payload:', payload);
       callback(payload);
     })
     .subscribe();
@@ -413,4 +425,66 @@ export const deleteFriendship = async (session, friendId) => {
 
   if (error) throw error;
   return data;
+};
+
+export const updateUserBatteryLevel = async (session, batteryLevel, isCharging) => {
+  if (!session || !session.user) throw new Error('Not authenticated');
+
+  console.log('Updating battery level in Supabase:', batteryLevel, 'Charging:', isCharging);
+
+  const { data, error } = await supabase
+    .from('user_locations')
+    .update({ battery_level: batteryLevel, is_charging: isCharging })
+    .eq('user_id', session.user.id);
+
+  if (error) {
+    console.error('Error updating battery info in user_locations:', error);
+    throw error;
+  }
+
+  console.log('Battery info updated successfully in Supabase:', { batteryLevel, isCharging });
+  return { batteryLevel, isCharging };
+};
+
+export const getFriendsBatteryLevels = async (session) => {
+  if (!session || !session.user) throw new Error('Not authenticated');
+
+  const { data: friendships, error: friendshipsError } = await supabase
+    .from('friendships')
+    .select('friend_id')
+    .eq('user_id', session.user.id)
+    .eq('status', 'accepted');
+
+  if (friendshipsError) throw friendshipsError;
+
+  const friendIds = friendships.map(f => f.friend_id);
+
+  const { data, error } = await supabase
+    .from('user_locations')
+    .select('user_id, battery_level')
+    .in('user_id', friendIds);
+
+  if (error) {
+    console.error('Error fetching friends battery levels:', error);
+    throw error;
+  }
+
+  return data;
+};
+
+export const subscribeToBatteryLevelChanges = (session, callback) => {
+  if (!session || !session.user) throw new Error('Not authenticated');
+
+  return supabase
+    .channel('battery_level_changes')
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'user_locations',
+      filter: `battery_level=is.not.null`,
+    }, payload => {
+      console.log('Received battery level update:', payload.new);
+      callback(payload.new);
+    })
+    .subscribe();
 };

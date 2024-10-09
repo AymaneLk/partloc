@@ -12,11 +12,16 @@ import {
   subscribeToFriendsLocations, 
   updateWatchState, 
   subscribeToWatchStateChanges, 
-  getInitialProfiles
+  getInitialProfiles, 
+  updateUserBatteryLevel,
+  subscribeToBatteryLevelChanges,
+  getFriendsBatteryLevels
 } from '../supabaseClient';
 import { debounce } from 'lodash';
 import { LOCATION_UPDATE_INTERVAL } from '../supabaseClient';
 import MaterialIcon from 'react-native-vector-icons/MaterialIcons';
+import * as Battery from 'expo-battery';
+import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 
 // Import your custom icon images
 import customMarkerIcon from '../assets/location.png';
@@ -56,6 +61,21 @@ const getInitials = (name) => {
 
 const OFFLINE_THRESHOLD = 60000; // 1 minute in milliseconds
 
+const getBatteryColor = (level) => {
+  if (level > 70) return '#4CAF50'; // Green for high battery
+  if (level > 30) return '#FFA500'; // Orange for medium battery
+  return '#FF0000'; // Red for low battery
+};
+
+const getBatteryIcon = (level) => {
+  if (level >= 90) return 'battery';
+  if (level >= 70) return 'battery-80';
+  if (level >= 50) return 'battery-60';
+  if (level >= 30) return 'battery-40';
+  if (level >= 15) return 'battery-20';
+  return 'battery-alert';
+};
+
 function MapComponent({ session }) {
   const [mapState, setMapState] = useState({
     location: null,
@@ -74,6 +94,9 @@ function MapComponent({ session }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [lastUpdatedLocation, setLastUpdatedLocation] = useState(null);
   const [appState, setAppState] = useState(AppState.currentState);
+  const [currentUserBatteryLevel, setCurrentUserBatteryLevel] = useState(null);
+  const [isCharging, setIsCharging] = useState(false);
+  const [batteryLevels, setBatteryLevels] = useState({});
 
   const mapRef = useRef(null);
   const navigation = useNavigation();
@@ -242,6 +265,9 @@ function MapComponent({ session }) {
     let watchStateSubscription;
     let watchStateRefreshInterval;
     let locationUpdateInterval;
+    let batterySubscription;
+    let batteryLevelSubscription; // Declare this only once
+    let batteryCheckInterval;
 
     const refreshWatchStates = async () => {
       try {
@@ -308,6 +334,7 @@ function MapComponent({ session }) {
             if (!updatedLocations.some(loc => loc.user_id === payload.new.user_id)) {
               updatedLocations.push({ ...payload.new, lastUpdated: new Date().toISOString() });
             }
+            console.log('Updated friend location:', payload.new); // Add this line
             return { ...prev, friendsLocations: updatedLocations };
           });
         });
@@ -352,6 +379,14 @@ function MapComponent({ session }) {
 
         // Set up periodic refresh of watching states
         watchStateRefreshInterval = setInterval(refreshWatchStates, 10000); // Refresh every 10 seconds
+
+        // Set up battery level subscription
+        batteryLevelSubscription = subscribeToBatteryLevelChanges(session, (updatedLocation) => {
+          setBatteryLevels(prev => ({
+            ...prev,
+            [updatedLocation.user_id]: updatedLocation.battery_level
+          }));
+        });
       } catch (error) {
         console.error('Error setting up location and friends:', error);
       }
@@ -359,18 +394,54 @@ function MapComponent({ session }) {
 
     setupLocationAndFriends();
 
+    const updateBatteryInfo = async () => {
+      const batteryLevel = await Battery.getBatteryLevelAsync();
+      const batteryState = await Battery.getBatteryStateAsync();
+      const isCharging = batteryState === Battery.BatteryState.CHARGING || 
+                         batteryState === Battery.BatteryState.FULL;
+      const level = Math.floor(batteryLevel * 100); // Use Math.floor instead of Math.round
+      
+      console.log('Raw battery level:', batteryLevel, 'Calculated level:', level, 'Charging:', isCharging);
+      
+      if (level !== currentUserBatteryLevel || isCharging !== isCharging) {
+        setCurrentUserBatteryLevel(level);
+        setIsCharging(isCharging);
+        await updateUserBatteryLevel(session, level, isCharging);
+      }
+    };
+
+    const setupBatteryMonitoring = async () => {
+      await updateBatteryInfo(); // Initial update
+
+      batterySubscription = Battery.addBatteryStateListener(({ batteryLevel, batteryState }) => {
+        updateBatteryInfo(); // Call the full update function on any battery change
+      });
+
+      // Check battery level more frequently on iOS
+      if (Platform.OS === 'ios') {
+        batteryCheckInterval = setInterval(updateBatteryInfo, 10000); // Every 10 seconds for iOS
+      } else {
+        batteryCheckInterval = setInterval(updateBatteryInfo, 30000); // Every 30 seconds for Android
+      }
+    };
+
+    setupBatteryMonitoring();
+
     return () => {
       if (locationSubscription) locationSubscription.remove();
       if (friendsSubscription) friendsSubscription.unsubscribe();
       if (watchStateSubscription) watchStateSubscription.unsubscribe();
       if (watchStateRefreshInterval) clearInterval(watchStateRefreshInterval);
       if (locationUpdateInterval) clearInterval(locationUpdateInterval);
+      if (batterySubscription) batterySubscription.remove();
+      if (batteryLevelSubscription) batteryLevelSubscription.unsubscribe();
       debouncedUpdateLocation.cancel(); // Cancel any pending debounced calls
+      if (batteryCheckInterval) clearInterval(batteryCheckInterval);
       
       // Update watching state to false when the component unmounts
       updateWatchState(session.user.id, false);
     };
-  }, [session, debouncedUpdateLocation, loadFriendsLocations, fitMapToMarkers]);
+  }, [session, debouncedUpdateLocation, loadFriendsLocations, fitMapToMarkers, currentUserBatteryLevel, isCharging]);
 
   useFocusEffect(useCallback(() => {
     loadFriendsLocations();
@@ -467,18 +538,31 @@ function MapComponent({ session }) {
 
   const renderMarker = useCallback((user, isCurrentUser = false) => {
     const { latitude, longitude } = user;
-    let name, avatarUrl, isWatching;
+    let name, avatarUrl, isWatching, batteryLevel, charging;
 
     if (isCurrentUser) {
       name = 'Me';
       avatarUrl = profiles[session.user.id]?.avatar_url;
       isWatching = profiles[session.user.id]?.watch_state || false;
+      batteryLevel = currentUserBatteryLevel;
+      charging = isCharging;
     } else {
       const profile = profiles[user.user_id];
       name = profile?.full_name || 'Unknown';
       avatarUrl = profile?.avatar_url;
       isWatching = profile?.watch_state || false;
+      batteryLevel = batteryLevels[user.user_id] || user.battery_level || 0;
+      charging = user.is_charging;
     }
+
+    console.log(`Rendering marker for ${name}:`, {
+      isCurrentUser,
+      batteryLevel,
+      charging,
+      currentUserBatteryLevel,
+      userBatteryLevel: user.battery_level,
+      batteryLevelsState: batteryLevels[user.user_id]
+    });
 
     const initials = getInitials(name);
     const backgroundColor = isCurrentUser ? colors.accent : mapState.friendColors[user.user_id] || getRandomLightColor();
@@ -503,21 +587,6 @@ function MapComponent({ session }) {
           delayLongPress={500}
         >
           <View style={markerStyle}>
-            {Platform.OS === 'ios' && (
-              <>
-                <View style={[
-                  styles.statusDot,
-                  isOnline ? styles.onlineDot : styles.offlineDot
-                ]} />
-                <View style={styles.watchingEye}>
-                  <Icon 
-                    name={isWatching ? "eye" : "eye-off"} 
-                    size={12} 
-                    color={isWatching ? colors.error : '#9E9E9E'}
-                  />
-                </View>
-              </>
-            )}
             {avatarUrl ? (
               <Image 
                 source={{ uri: avatarUrl }} 
@@ -534,17 +603,51 @@ function MapComponent({ session }) {
                 <Text style={styles.initialsText}>{initials}</Text>
               </View>
             )}
+            {Platform.OS === 'ios' && (
+              <>
+                <View style={[
+                  styles.statusDot,
+                  isOnline ? styles.onlineDot : styles.offlineDot
+                ]} />
+                <View style={styles.watchingEye}>
+                  <Icon 
+                    name={isWatching ? "eye" : "eye-off"} 
+                    size={12} 
+                    color={isWatching ? colors.error : '#9E9E9E'}
+                  />
+                </View>
+                <View style={[
+                  styles.batteryIndicator,
+                  { backgroundColor: getBatteryColor(batteryLevel) }
+                ]}>
+                  <MaterialCommunityIcons 
+                    name={charging ? 'battery-charging' : getBatteryIcon(batteryLevel)} 
+                    size={14} 
+                    color="white" 
+                  />
+                  <Text style={styles.batteryText}>{Math.floor(batteryLevel)}%</Text>
+                </View>
+              </>
+            )}
           </View>
         </TouchableOpacity>
         <Callout tooltip>
           <View style={styles.calloutContainer}>
             <Text style={styles.calloutName}>{name}</Text>
             <Text style={styles.calloutDescription}>{description}</Text>
+            <View style={styles.calloutBatteryContainer}>
+              <MaterialCommunityIcons 
+                name={charging ? 'battery-charging' : getBatteryIcon(batteryLevel)} 
+                size={16} 
+                color="white" 
+              />
+              <Text style={styles.calloutBattery}>{Math.floor(batteryLevel)}% {charging ? '(Charging)' : ''}</Text>
+            </View>
           </View>
         </Callout>
       </Marker>
     );
-  }, [session.user.id, profiles, mapState.friendColors, getLocationStatus, handleMarkerPress, handleMarkerLongPress]);
+  }, [session.user.id, profiles, mapState.friendColors, currentUserBatteryLevel, isCharging, batteryLevels, getLocationStatus, handleMarkerPress, handleMarkerLongPress]);
 
   const renderUserDetailsModal = () => {
     if (!selectedUser) return null;
@@ -946,6 +1049,34 @@ const styles = StyleSheet.create({
   calloutDescription: {
     color: 'white',
     fontSize: 8,
+  },
+  batteryIndicator: {
+    position: 'absolute',
+    bottom: -12,
+    right: -12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 10,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    zIndex: 2,
+  },
+  calloutBatteryContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  calloutBattery: {
+    color: 'white',
+    fontSize: 10,
+    marginLeft: 4,
+  },
+  batteryText: {
+    color: 'white',
+    fontSize: 8,
+    marginLeft: 2,
+    fontWeight: 'bold',
   },
 });
 
