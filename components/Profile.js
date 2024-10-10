@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Image, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, SafeAreaView, Linking, Platform } from 'react-native';
+import { View, Text, Image, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, SafeAreaView, Linking, Platform, Modal, TextInput } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import * as ImagePicker from 'expo-image-picker';
@@ -15,6 +15,11 @@ const Profile = ({ session }) => {
   const [emergencyContacts, setEmergencyContacts] = useState([]);
   const [showEmergencyContacts, setShowEmergencyContacts] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
+  const [isAudioSharing, setIsAudioSharing] = useState(false);
+  const [isContactModalVisible, setIsContactModalVisible] = useState(false);
+  const [editingContact, setEditingContact] = useState(null);
+  const [contactName, setContactName] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
 
   useEffect(() => {
     if (session && session.user) {
@@ -33,6 +38,7 @@ const Profile = ({ session }) => {
 
       if (error) throw error;
       setUser(data);
+      setShowEmergencyContacts(data.show_emergency_contacts); // Use the correct column name
     } catch (error) {
       console.error('Error fetching user profile:', error);
       Alert.alert('Error', 'Failed to load user profile');
@@ -56,21 +62,89 @@ const Profile = ({ session }) => {
 
   const toggleEmergencyContactsVisibility = async () => {
     try {
+      const newValue = !showEmergencyContacts;
       const { data, error } = await supabase
         .from('profiles')
-        .update({ show_emergency_contacts: !showEmergencyContacts })
-        .eq('user_id', user.user_id);
+        .update({ show_emergency_contacts: newValue }) // Use the correct column name
+        .eq('user_id', session.user.id);
 
       if (error) throw error;
-      setShowEmergencyContacts(!showEmergencyContacts);
+      setShowEmergencyContacts(newValue);
+      Alert.alert('Success', `Emergency contacts visibility ${newValue ? 'enabled' : 'disabled'}`);
     } catch (error) {
+      console.error('Error updating emergency contacts visibility:', error);
       Alert.alert('Error', 'Failed to update emergency contacts visibility');
     }
   };
 
-  const addEmergencyContact = () => {
-    // Implement add emergency contact functionality
-    Alert.alert('Add Emergency Contact', 'This feature is not implemented yet.');
+  const openContactModal = (contact = null) => {
+    if (contact) {
+      setEditingContact(contact);
+      setContactName(contact.name);
+      setContactPhone(contact.phone);
+    } else {
+      setEditingContact(null);
+      setContactName('');
+      setContactPhone('');
+    }
+    setIsContactModalVisible(true);
+  };
+
+  const closeContactModal = () => {
+    setIsContactModalVisible(false);
+    setEditingContact(null);
+    setContactName('');
+    setContactPhone('');
+  };
+
+  const saveContact = async () => {
+    if (!contactName.trim() || !contactPhone.trim()) {
+      Alert.alert('Error', 'Name and phone number cannot be empty');
+      return;
+    }
+
+    try {
+      if (editingContact) {
+        // Update existing contact
+        const { data, error } = await supabase
+          .from('emergency_contacts')
+          .update({ name: contactName.trim(), phone: contactPhone.trim() })
+          .eq('id', editingContact.id);
+
+        if (error) throw error;
+      } else {
+        // Add new contact
+        const { data, error } = await supabase
+          .from('emergency_contacts')
+          .insert({ user_id: session.user.id, name: contactName.trim(), phone: contactPhone.trim() });
+
+        if (error) throw error;
+      }
+
+      fetchEmergencyContacts(); // Refresh the contacts list
+      closeContactModal();
+      Alert.alert('Success', editingContact ? 'Contact updated successfully' : 'Contact added successfully');
+    } catch (error) {
+      console.error('Error saving contact:', error);
+      Alert.alert('Error', 'Failed to save contact');
+    }
+  };
+
+  const deleteContact = async (contactId) => {
+    try {
+      const { error } = await supabase
+        .from('emergency_contacts')
+        .delete()
+        .eq('id', contactId);
+
+      if (error) throw error;
+
+      fetchEmergencyContacts(); // Refresh the contacts list
+      Alert.alert('Success', 'Contact deleted successfully');
+    } catch (error) {
+      console.error('Error deleting contact:', error);
+      Alert.alert('Error', 'Failed to delete contact');
+    }
   };
 
   const pickImage = async () => {
@@ -168,6 +242,30 @@ const Profile = ({ session }) => {
     }
   };
 
+  const toggleAudioSharing = async () => {
+    try {
+      setIsAudioSharing(!isAudioSharing);
+      if (!isAudioSharing) {
+        // Update user's profile to indicate they're willing to share audio
+        await supabase
+          .from('profiles')
+          .update({ audio_sharing_enabled: true })
+          .eq('user_id', session.user.id);
+        Alert.alert('Audio Sharing Enabled', 'Your friends can now request to listen to your surroundings.');
+      } else {
+        // Update user's profile to indicate they're not willing to share audio
+        await supabase
+          .from('profiles')
+          .update({ audio_sharing_enabled: false })
+          .eq('user_id', session.user.id);
+        Alert.alert('Audio Sharing Disabled', 'Your friends can no longer listen to your surroundings.');
+      }
+    } catch (error) {
+      console.error('Error toggling audio sharing:', error);
+      Alert.alert('Error', 'Failed to toggle audio sharing');
+    }
+  };
+
   const deleteProfilePicture = async () => {
     Alert.alert(
       "Delete Profile Picture",
@@ -241,31 +339,6 @@ const Profile = ({ session }) => {
           <Text style={styles.phone}>{user?.phone || 'Phone number not set'}</Text>
         </View>
 
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Emergency Contacts</Text>
-            <Switch
-              value={showEmergencyContacts}
-              onValueChange={toggleEmergencyContactsVisibility}
-              trackColor={{ false: colors.border, true: colors.accent }}
-              thumbColor={showEmergencyContacts ? colors.primary : colors.surface}
-            />
-          </View>
-          {emergencyContacts.map((contact, index) => (
-            <View key={index} style={styles.contactItem}>
-              <Icon name="person" size={24} color={colors.white} style={styles.contactIcon} />
-              <View style={styles.contactInfo}>
-                <Text style={styles.contactName}>{contact.name}</Text>
-                <Text style={styles.contactPhone}>{contact.phone}</Text>
-              </View>
-            </View>
-          ))}
-          <TouchableOpacity style={styles.addButton} onPress={addEmergencyContact}>
-            <Icon name="add-circle" size={24} color={colors.white} />
-            <Text style={styles.addButtonText}>Add Emergency Contact</Text>
-          </TouchableOpacity>
-        </View>
-
         <View style={styles.actionButtons}>
           <TouchableOpacity style={styles.actionButton} onPress={() => navigation.navigate('FriendsList')}>
             <Icon name="people" size={28} color={colors.white} />
@@ -280,7 +353,77 @@ const Profile = ({ session }) => {
             <Text style={styles.actionButtonText}>Requests</Text>
           </TouchableOpacity>
         </View>
+
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Emergency Contacts</Text>
+            <View style={styles.switchContainer}>
+              <Switch
+                value={showEmergencyContacts}
+                onValueChange={toggleEmergencyContactsVisibility}
+                trackColor={{ false: colors.border, true: colors.error }}
+                thumbColor={colors.white}
+                ios_backgroundColor={colors.border}
+              />
+            </View>
+          </View>
+          {emergencyContacts.map((contact, index) => (
+            <View key={index} style={styles.contactItem}>
+              <Icon name="person" size={24} color={colors.white} style={styles.contactIcon} />
+              <View style={styles.contactInfo}>
+                <Text style={styles.contactName}>{contact.name}</Text>
+                <Text style={styles.contactPhone}>{contact.phone}</Text>
+              </View>
+              <TouchableOpacity onPress={() => openContactModal(contact)} style={styles.editButton}>
+                <Icon name="edit" size={20} color={colors.white} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => deleteContact(contact.id)} style={styles.deleteButton}>
+                <Icon name="delete" size={20} color={colors.white} />
+              </TouchableOpacity>
+            </View>
+          ))}
+          <TouchableOpacity style={styles.addButton} onPress={() => openContactModal()}>
+            <Icon name="add-circle" size={24} color={colors.white} />
+            <Text style={styles.addButtonText}>Add Emergency Contact</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
+
+      <Modal
+        visible={isContactModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={closeContactModal}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>
+              {editingContact ? 'Edit Contact' : 'Add Contact'}
+            </Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Name"
+              value={contactName}
+              onChangeText={setContactName}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Phone"
+              value={contactPhone}
+              onChangeText={setContactPhone}
+              keyboardType="phone-pad"
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity style={styles.modalButton} onPress={closeContactModal}>
+                <Text style={[styles.modalButtonText, { color: colors.error }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalButton, styles.saveButton]} onPress={saveContact}>
+                <Text style={styles.saveButtonText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -466,6 +609,81 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontFamily: 'ClashGrotesk-Semibold',
     marginTop: 8,
+  },
+  settingItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  settingLabel: {
+    fontSize: 16,
+    color: colors.text.primary,
+    fontFamily: 'ClashGrotesk-Medium',
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    backgroundColor: colors.surface,
+    borderRadius: 20,
+    padding: 20,
+    width: '80%',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: colors.text.primary,
+    marginBottom: 20,
+    textAlign: 'center',
+    fontFamily: 'ClashGrotesk-Bold',
+  },
+  input: {
+    backgroundColor: colors.background,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 15,
+    fontSize: 16,
+    color: colors.text.primary,
+    fontFamily: 'ClashGrotesk-Medium',
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  modalButton: {
+    flex: 1,
+    padding: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  saveButton: {
+    backgroundColor: colors.error,
+    marginLeft: 10,
+  },
+  modalButtonText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    fontFamily: 'ClashGrotesk-Semibold',
+  },
+  editButton: {
+    padding: 8,
+    marginRight: 8,
+  },
+  deleteButton: {
+    padding: 8,
+  },
+  saveButtonText: {
+    color: colors.white,
+    fontSize: 16,
+    fontWeight: 'bold',
+    fontFamily: 'ClashGrotesk-Semibold',
+  },
+  switchContainer: {
+    transform: [{ scaleX: 1.2 }, { scaleY: 1.2 }], // Makes the switch slightly larger
   },
 });
 

@@ -488,3 +488,30 @@ export const subscribeToBatteryLevelChanges = (session, callback) => {
     })
     .subscribe();
 };
+
+export const requestAudioAccess = async (friendId) => {
+  const { data, error } = await supabase
+    .from('audio_access_requests')
+    .insert({ requester_id: supabase.auth.user().id, target_id: friendId });
+  if (error) throw error;
+  return data;
+};
+
+export const grantAudioAccess = async (requestId) => {
+  const { data, error } = await supabase
+    .from('audio_access_requests')
+    .update({ status: 'granted' })
+    .eq('id', requestId);
+  if (error) throw error;
+  return data;
+};
+
+export const revokeAudioAccess = async (friendId) => {
+  const { data, error } = await supabase
+    .from('audio_access_requests')
+    .update({ status: 'revoked' })
+    .eq('requester_id', friendId)
+    .eq('target_id', supabase.auth.user().id);
+  if (error) throw error;
+  return data;
+};

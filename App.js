@@ -17,6 +17,7 @@ import { colors } from './theme';
 import { supabase, updateWatchState, updateUserLocation } from './supabaseClient';
 import { AppState } from 'react-native';
 import * as Location from 'expo-location';
+import FriendProfile from './components/FriendProfile';
 
 const Stack = createNativeStackNavigator();
 
@@ -180,6 +181,7 @@ function App() {
             <Stack.Screen name="FriendRequests">
               {(props) => <FriendRequests {...props} session={session} reloadSession={reloadSession} />}
             </Stack.Screen>
+            <Stack.Screen name="FriendProfile" component={FriendProfile} options={{ headerShown: false }} />
           </>
         ) : (
           <>

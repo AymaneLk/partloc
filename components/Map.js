@@ -23,7 +23,6 @@ import MaterialIcon from 'react-native-vector-icons/MaterialIcons';
 import * as Battery from 'expo-battery';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { getDistance } from 'geolib';
-import NetInfo from '@react-native-community/netinfo';
 
 // Import your custom icon images
 import customMarkerIcon from '../assets/location.png';
@@ -99,7 +98,6 @@ function MapComponent({ session }) {
   const [currentUserBatteryLevel, setCurrentUserBatteryLevel] = useState(null);
   const [isCharging, setIsCharging] = useState(false);
   const [batteryLevels, setBatteryLevels] = useState({});
-  const [isOnline, setIsOnline] = useState(true);
 
   const mapRef = useRef(null);
   const navigation = useNavigation();
@@ -793,26 +791,6 @@ function MapComponent({ session }) {
     setSelectedUser(null);
   }, []);
 
-  useEffect(() => {
-    const handleConnectivityChange = (state) => {
-      setIsOnline(state.isConnected);
-    };
-
-    NetInfo.addEventListener(handleConnectivityChange);
-
-    return () => {
-      NetInfo.removeEventListener(handleConnectivityChange);
-    };
-  }, []);
-
-  if (!isOnline) {
-    return (
-      <View style={styles.offlineContainer}>
-        <Text style={styles.offlineText}>No internet connection</Text>
-      </View>
-    );
-  }
-
   if (!mapState.location) {
     return (
       <View style={styles.loadingContainer}>
@@ -1201,16 +1179,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: 'bold',
     marginLeft: 4,
-  },
-  offlineContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.background,
-  },
-  offlineText: {
-    fontSize: 18,
-    color: colors.text.primary,
   },
 });
 

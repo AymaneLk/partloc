@@ -4,16 +4,34 @@ import { colors } from '../theme';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useNavigation } from '@react-navigation/native';
 import { supabase } from '../supabaseClient';
+import { updateWatchState } from '../supabaseClient';  // Make sure this import is at the top of your file
 
 const Settings = ({ session }) => {
   const navigation = useNavigation();
   const [isChangePasswordModalVisible, setChangePasswordModalVisible] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [isLocationSharing, setIsLocationSharing] = useState(false);
+  const [isAudioSharing, setIsAudioSharing] = useState(false);
 
   const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) console.log('Error logging out:', error.message);
+    try {
+      // Attempt to update watch state to false before logging out
+      try {
+        await updateWatchState(session.user.id, false);
+      } catch (watchStateError) {
+        console.log('Error updating watch state during logout:', watchStateError);
+        // Continue with logout even if updating watch state fails
+      }
+
+      // Proceed with logout
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+    } catch (error) {
+      console.log('Error during logout:', error.message);
+      // Optionally, you can show an alert to the user
+      // Alert.alert('Logout Error', 'An error occurred while logging out. Please try again.');
+    }
   };
 
   const handleChangePassword = async () => {
@@ -47,16 +65,28 @@ const Settings = ({ session }) => {
     }
   };
 
+  const toggleLocationSharing = async (value) => {
+    setIsLocationSharing(value);
+    // Implement the logic to update location sharing preference in the backend
+  };
+
+  const toggleAudioSharing = async (value) => {
+    setIsAudioSharing(value);
+    // Implement the logic to update audio sharing preference in the backend
+  };
+
   const SettingItem = ({ title, value, onValueChange }) => (
     <View style={styles.settingItem}>
       <Text style={styles.settingTitle}>{title}</Text>
-      <Switch
-        value={value}
-        onValueChange={onValueChange}
-        trackColor={{ false: colors.border, true: colors.error }}
-        thumbColor={colors.white}
-        ios_backgroundColor={colors.border}
-      />
+      <View style={styles.switchContainer}>
+        <Switch
+          value={value}
+          onValueChange={onValueChange}
+          trackColor={{ false: colors.border, true: colors.error }}
+          thumbColor={colors.white}
+          ios_backgroundColor={colors.border}
+        />
+      </View>
     </View>
   );
 
@@ -102,8 +132,13 @@ const Settings = ({ session }) => {
             <Text style={styles.sectionTitle}>Privacy</Text>
             <SettingItem 
               title="Location Sharing" 
-              value={true} 
-              onValueChange={() => {}}
+              value={isLocationSharing} 
+              onValueChange={toggleLocationSharing}
+            />
+            <SettingItem 
+              title="Audio Sharing" 
+              value={isAudioSharing} 
+              onValueChange={toggleAudioSharing}
             />
           </View>
           <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
@@ -144,10 +179,10 @@ const Settings = ({ session }) => {
                 placeholderTextColor={colors.text.secondary}
               />
               <TouchableOpacity style={styles.modalButton} onPress={handleChangePassword}>
-                <Text style={styles.modalButtonText}>Change Password</Text>
+                <Text style={styles.changePasswordButtonText}>Change Password</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.modalCancelButton} onPress={() => setChangePasswordModalVisible(false)}>
-                <Text style={styles.modalButtonText}>Cancel</Text>
+                <Text style={[styles.modalButtonText, { color: colors.error }]}>Cancel</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -317,7 +352,6 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   modalButtonText: {
-    color: colors.white,
     fontWeight: 'bold',
     fontSize: 16,
     fontFamily: 'ClashGrotesk-Bold',
@@ -327,6 +361,15 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  changePasswordButtonText: {
+    color: colors.white,
+    fontWeight: 'bold',
+    fontSize: 16,
+    fontFamily: 'ClashGrotesk-Bold',
+  },
+  switchContainer: {
+    transform: [{ scaleX: 1.2 }, { scaleY: 1.2 }], // Makes the switch slightly larger
   },
 });
 
