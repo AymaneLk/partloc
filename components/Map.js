@@ -22,6 +22,8 @@ import { LOCATION_UPDATE_INTERVAL } from '../supabaseClient';
 import MaterialIcon from 'react-native-vector-icons/MaterialIcons';
 import * as Battery from 'expo-battery';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
+import { getDistance } from 'geolib';
+import NetInfo from '@react-native-community/netinfo';
 
 // Import your custom icon images
 import customMarkerIcon from '../assets/location.png';
@@ -97,6 +99,7 @@ function MapComponent({ session }) {
   const [currentUserBatteryLevel, setCurrentUserBatteryLevel] = useState(null);
   const [isCharging, setIsCharging] = useState(false);
   const [batteryLevels, setBatteryLevels] = useState({});
+  const [isOnline, setIsOnline] = useState(true);
 
   const mapRef = useRef(null);
   const navigation = useNavigation();
@@ -270,18 +273,33 @@ function MapComponent({ session }) {
     let batteryCheckInterval;
 
     const refreshWatchStates = async () => {
-      try {
-        const updatedProfiles = await getInitialProfiles();
-        setProfiles(prev => {
-          const updated = { ...prev };
-          updatedProfiles.forEach(profile => {
-            updated[profile.user_id] = { ...updated[profile.user_id], ...profile };
+      const maxRetries = 3;
+      let retries = 0;
+
+      const attemptRefresh = async () => {
+        try {
+          const updatedProfiles = await getInitialProfiles();
+          setProfiles(prev => {
+            const updated = { ...prev };
+            updatedProfiles.forEach(profile => {
+              updated[profile.user_id] = { ...updated[profile.user_id], ...profile };
+            });
+            return updated;
           });
-          return updated;
-        });
-      } catch (error) {
-        console.error('Error refreshing watch states:', error);
-      }
+        } catch (error) {
+          console.error('Error refreshing watch states:', error);
+          if (retries < maxRetries) {
+            retries++;
+            console.log(`Retrying... Attempt ${retries} of ${maxRetries}`);
+            await new Promise(resolve => setTimeout(resolve, 1000 * retries)); // Wait before retrying
+            return attemptRefresh();
+          } else {
+            console.error('Max retries reached. Unable to refresh watch states.');
+          }
+        }
+      };
+
+      await attemptRefresh();
     };
 
     const setupLocationAndFriends = async () => {
@@ -530,6 +548,14 @@ function MapComponent({ session }) {
   }, []);
 
   const handleMarkerPress = useCallback((user) => {
+    if (user.user_id === session.user.id) {
+      // If the current user is tapped, clear the selection
+      setSelectedUser(null);
+    } else {
+      // Set the tapped user as the selected user
+      setSelectedUser(user);
+    }
+
     // Zoom to the user's location
     if (mapRef.current) {
       mapRef.current.animateToRegion({
@@ -539,7 +565,7 @@ function MapComponent({ session }) {
         longitudeDelta: LONGITUDE_DELTA / 4,
       }, 1000);
     }
-  }, []);
+  }, [session.user.id]);
 
   const handleMarkerLongPress = useCallback((user) => {
     setSelectedUser(user);
@@ -593,7 +619,10 @@ function MapComponent({ session }) {
         coordinate={{ latitude, longitude }}
         title={name}
         description={isCurrentUser ? "Your location" : description}
-        onPress={() => handleMarkerPress(user)}
+        onPress={(e) => {
+          e.stopPropagation(); // Prevent the map press event from firing
+          handleMarkerPress(user);
+        }}
       >
         <TouchableOpacity
           onLongPress={() => !isCurrentUser && handleMarkerLongPress(user)}
@@ -732,6 +761,58 @@ function MapComponent({ session }) {
     }
   }, [selectedUser]);
 
+  const calculateDistance = (point1, point2) => {
+    const distance = getDistance(
+      { latitude: point1.latitude, longitude: point1.longitude },
+      { latitude: point2.latitude, longitude: point2.longitude }
+    );
+    return (distance / 1000).toFixed(2); // Convert to km and round to 2 decimal places
+  };
+
+  const renderDistanceInfo = () => {
+    if (selectedUser && mapState.location) {
+      const distance = calculateDistance(
+        { latitude: mapState.location.coords.latitude, longitude: mapState.location.coords.longitude },
+        selectedUser
+      );
+      return (
+        <View style={styles.distanceInfoContainer}>
+          <Text style={styles.distanceValue}>
+            {distance}
+          </Text>
+          <Text style={styles.distanceUnit}>
+            KM
+          </Text>
+        </View>
+      );
+    }
+    return null;
+  };
+
+  const handleMapPress = useCallback(() => {
+    setSelectedUser(null);
+  }, []);
+
+  useEffect(() => {
+    const handleConnectivityChange = (state) => {
+      setIsOnline(state.isConnected);
+    };
+
+    NetInfo.addEventListener(handleConnectivityChange);
+
+    return () => {
+      NetInfo.removeEventListener(handleConnectivityChange);
+    };
+  }, []);
+
+  if (!isOnline) {
+    return (
+      <View style={styles.offlineContainer}>
+        <Text style={styles.offlineText}>No internet connection</Text>
+      </View>
+    );
+  }
+
   if (!mapState.location) {
     return (
       <View style={styles.loadingContainer}>
@@ -761,6 +842,7 @@ function MapComponent({ session }) {
         onMapReady={onMapReady}
         zoomEnabled={true}
         scrollEnabled={true}
+        onPress={handleMapPress}
       >
         {mapState.location && renderMarker({
           user_id: session.user.id,
@@ -814,6 +896,7 @@ function MapComponent({ session }) {
         </TouchableOpacity>
       </SafeAreaView>
       {renderUserDetailsModal()}
+      {renderDistanceInfo()}
     </View>
   );
 }
@@ -1090,6 +1173,44 @@ const styles = StyleSheet.create({
     fontSize: 8,
     marginLeft: 2,
     fontWeight: 'bold',
+  },
+  distanceInfoContainer: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    backgroundColor: colors.error,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  distanceValue: {
+    color: colors.white,
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  distanceUnit: {
+    color: colors.white,
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginLeft: 4,
+  },
+  offlineContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+  },
+  offlineText: {
+    fontSize: 18,
+    color: colors.text.primary,
   },
 });
 

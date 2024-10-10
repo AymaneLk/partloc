@@ -16,7 +16,7 @@ export default function WelcomePage() {
   return (
     <View style={styles.container}>
       <Video
-        source={require('../assets/mapscolored.mp4')}
+        source={require('../assets/mapblack.mp4')}
         style={styles.backgroundVideo}
         resizeMode="cover"
         shouldPlay
