@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Image, Dimensions, SafeAreaView, Alert, Platform, Modal, AppState } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, Image, Dimensions, SafeAreaView, Alert, Platform, Modal, AppState, FlatList, PanResponder, Animated } from 'react-native';
 import MapView, { PROVIDER_DEFAULT, Marker, PROVIDER_GOOGLE, Callout } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { colors } from '../theme';
@@ -29,16 +29,20 @@ import customMarkerIcon from '../assets/location.png';
 import locationIcon from '../assets/map (1).png';
 import mapStyleIcon from '../assets/earth.png';
 
+// Near the top of your file, after the imports
+import standardMapImage from '../assets/standard.jpg';
+import satelliteMapImage from '../assets/sattelite.jpg';
+import hybridMapImage from '../assets/hybrid.jpg';
+
 const { width, height } = Dimensions.get('window');
 const ASPECT_RATIO = width / height;
 const LATITUDE_DELTA = 0.0922;
 const LONGITUDE_DELTA = LATITUDE_DELTA * ASPECT_RATIO;
 
 const mapStyles = [
-  { name: 'Standard', style: 'standard' },
-  { name: 'Satellite', style: 'satellite' },
-  { name: 'Hybrid', style: 'hybrid' },
-  { name: 'Terrain', style: 'terrain' },
+  { name: 'Standard', style: 'standard', image: standardMapImage },
+  { name: 'Satellite', style: 'satellite', image: satelliteMapImage },
+  { name: 'Hybrid', style: 'hybrid', image: hybridMapImage },
 ];
 
 // Add these functions at the top of your file, after the imports
@@ -98,6 +102,7 @@ function MapComponent({ session }) {
   const [currentUserBatteryLevel, setCurrentUserBatteryLevel] = useState(null);
   const [isCharging, setIsCharging] = useState(false);
   const [batteryLevels, setBatteryLevels] = useState({});
+  const [mapStyleModalVisible, setMapStyleModalVisible] = useState(false);
 
   const mapRef = useRef(null);
   const navigation = useNavigation();
@@ -115,20 +120,39 @@ function MapComponent({ session }) {
 
   const [lastTap, setLastTap] = useState(null);
 
-  const changeMapStyle = useCallback(() => {
-    if (Platform.OS === 'ios') {
-      setMapType(prevType => {
-        const types = ['standard', 'satellite', 'hybrid', 'terrain'];
-        const currentIndex = types.indexOf(prevType);
-        const nextIndex = (currentIndex + 1) % types.length;
-        return types[nextIndex];
-      });
-    } else {
-      setMapState(prev => ({
-        ...prev,
-        currentStyleIndex: (prev.currentStyleIndex + 1) % mapStyles.length
-      }));
-    }
+  const panY = useRef(new Animated.Value(0)).current;
+  const translateY = panY.interpolate({
+    inputRange: [-1, 0, 1],
+    outputRange: [0, 0, 1],
+  });
+
+  const resetModalPosition = Animated.timing(panY, {
+    toValue: 0,
+    duration: 300,
+    useNativeDriver: true,
+  });
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderMove: (_, gesture) => {
+        if (gesture.dy > 0) {
+          panY.setValue(gesture.dy);
+        }
+      },
+      onPanResponderRelease: (_, gesture) => {
+        if (gesture.dy > 50) {
+          setMapStyleModalVisible(false);
+        } else {
+          resetModalPosition.start();
+        }
+      },
+    })
+  ).current;
+
+  const changeMapStyle = useCallback((newStyle) => {
+    setMapType(newStyle);
+    setMapStyleModalVisible(false);
   }, []);
 
   useEffect(() => {
@@ -227,7 +251,7 @@ function MapComponent({ session }) {
     const minLng = Math.min(...longitudes);
     const maxLng = Math.max(...longitudes);
 
-    const paddingPercentage = 0.25; // Reduced padding for a tighter fit
+    const paddingPercentage = 0.1; // Reduced padding for a tighter fit
 
     const newRegion = {
       latitude: (minLat + maxLat) / 2,
@@ -791,6 +815,58 @@ function MapComponent({ session }) {
     setSelectedUser(null);
   }, []);
 
+  const renderMapStyleItem = ({ item }) => (
+    <TouchableOpacity
+      style={[
+        styles.mapStyleItem,
+        mapType === item.style && styles.selectedMapStyleItem
+      ]}
+      onPress={() => changeMapStyle(item.style)}
+    >
+      <Image source={item.image} style={styles.mapStyleImage} />
+      <Text style={[
+        styles.mapStyleText,
+        mapType === item.style && styles.selectedMapStyleText
+      ]}>{item.name}</Text>
+    </TouchableOpacity>
+  );
+
+  const renderMapStyleModal = () => (
+    <Modal
+      animationType="slide"
+      transparent={true}
+      visible={mapStyleModalVisible}
+      onRequestClose={() => setMapStyleModalVisible(false)}
+    >
+      <TouchableOpacity
+        style={styles.modalOverlay}
+        activeOpacity={1}
+        onPress={() => setMapStyleModalVisible(false)}
+      >
+        <Animated.View
+          style={[
+            styles.mapStyleModalContent,
+            { transform: [{ translateY }] }
+          ]}
+          {...panResponder.panHandlers}
+        >
+          <View style={styles.modalHandle} />
+          <Text style={styles.mapStyleModalTitle}>Map Style</Text>
+          <View style={styles.mapStyleListContainer}>
+            <FlatList
+              data={mapStyles}
+              renderItem={renderMapStyleItem}
+              keyExtractor={(item) => item.name}
+              horizontal={true}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.mapStyleList}
+            />
+          </View>
+        </Animated.View>
+      </TouchableOpacity>
+    </Modal>
+  );
+
   if (!mapState.location) {
     return (
       <View style={styles.loadingContainer}>
@@ -835,7 +911,7 @@ function MapComponent({ session }) {
       <SafeAreaView style={styles.topRightOverlay}>
         <TouchableOpacity 
           style={styles.iconButton} 
-          onPress={changeMapStyle}
+          onPress={() => setMapStyleModalVisible(true)}
         >
           <Image source={mapStyleIcon} style={styles.iconImage} />
         </TouchableOpacity>
@@ -875,6 +951,7 @@ function MapComponent({ session }) {
       </SafeAreaView>
       {renderUserDetailsModal()}
       {renderDistanceInfo()}
+      {renderMapStyleModal()}
     </View>
   );
 }
@@ -1046,9 +1123,62 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+  },
+  mapStyleModalContent: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    paddingTop: 10,
+    maxHeight: '50%',
+  },
+  modalHandle: {
+    width: 40,
+    height: 5,
+    backgroundColor: '#ccc',
+    borderRadius: 3,
+    alignSelf: 'center',
+    marginBottom: 15,
+  },
+  mapStyleModalTitle: {
+    fontSize: 18,
+    marginBottom: 20,
+    textAlign: 'center',
+    color: colors.text.primary,
+  },
+  mapStyleListContainer: {
+    justifyContent: 'center',
+    paddingBottom: 20,
+  },
+  mapStyleList: {
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  mapStyleItem: {
+    alignItems: 'center',
+    marginHorizontal: 13,
+    width: 100,
+    padding: 10,
+  },
+  selectedMapStyleItem: {
+    backgroundColor: colors.error,
+    borderRadius: 10,
+  },
+  mapStyleImage: {
+    width: 90,
+    height: 90,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  mapStyleText: {
+    textAlign: 'center',
+    fontSize: 15,
+    color: colors.text.primary,
+  },
+  selectedMapStyleText: {
+    color: colors.white,
   },
   modalContainer: {
     backgroundColor: colors.error, // This will make the modal orange

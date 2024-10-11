@@ -24,6 +24,7 @@ const FriendProfile = ({ route, navigation }) => {
 
       if (error) throw error;
       setProfile(data);
+      console.log('Fetched profile:', data); // Debug log
     } catch (error) {
       console.error('Error fetching friend profile:', error);
     }
@@ -31,15 +32,31 @@ const FriendProfile = ({ route, navigation }) => {
 
   const fetchEmergencyContacts = async () => {
     try {
-      const { data, error } = await supabase
-        .from('emergency_contacts')
-        .select('*')
-        .eq('user_id', userId);
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('show_emergency_contacts')
+        .eq('user_id', userId)
+        .single();
 
-      if (error) throw error;
-      setEmergencyContacts(data);
+      if (profileError) throw profileError;
+
+      console.log('Show emergency contacts:', profileData.show_emergency_contacts); // Debug log
+
+      if (profileData.show_emergency_contacts) {
+        const { data, error } = await supabase
+          .from('emergency_contacts')
+          .select('*')
+          .eq('user_id', userId);
+
+        if (error) throw error;
+        setEmergencyContacts(data);
+        console.log('Fetched emergency contacts:', data); // Debug log
+      } else {
+        setEmergencyContacts([]);
+      }
     } catch (error) {
       console.error('Error fetching emergency contacts:', error);
+      setEmergencyContacts([]);
     }
   };
 
@@ -91,7 +108,7 @@ const FriendProfile = ({ route, navigation }) => {
                 </View>
               ))
             ) : (
-              <Text style={styles.noContactsText}>No emergency contacts added.</Text>
+              <Text style={styles.noContactsText}>This user has not added any emergency contacts.</Text>
             )
           ) : (
             <Text style={styles.notEnabledText}>User is not sharing emergency contacts.</Text>
