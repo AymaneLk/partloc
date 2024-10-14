@@ -24,7 +24,6 @@ const FriendProfile = ({ route, navigation }) => {
 
       if (error) throw error;
       setProfile(data);
-      console.log('Fetched profile:', data); // Debug log
     } catch (error) {
       console.error('Error fetching friend profile:', error);
     }
@@ -34,15 +33,13 @@ const FriendProfile = ({ route, navigation }) => {
     try {
       const { data: profileData, error: profileError } = await supabase
         .from('profiles')
-        .select('show_emergency_contacts')
+        .select('show_emergency_contact')
         .eq('user_id', userId)
         .single();
 
       if (profileError) throw profileError;
 
-      console.log('Show emergency contacts:', profileData.show_emergency_contacts); // Debug log
-
-      if (profileData.show_emergency_contacts) {
+      if (profileData.show_emergency_contact) {
         const { data, error } = await supabase
           .from('emergency_contacts')
           .select('*')
@@ -50,7 +47,6 @@ const FriendProfile = ({ route, navigation }) => {
 
         if (error) throw error;
         setEmergencyContacts(data);
-        console.log('Fetched emergency contacts:', data); // Debug log
       } else {
         setEmergencyContacts([]);
       }
@@ -89,29 +85,24 @@ const FriendProfile = ({ route, navigation }) => {
           <Text style={styles.name}>{profile.full_name}</Text>
           <Text style={styles.email}>{profile.email}</Text>
           <Text style={styles.phone}>{profile.phone || 'Phone number not set'}</Text>
-          <Text style={styles.memberSince}>Member since {new Date(profile.created_at).toLocaleDateString()}</Text>
         </View>
 
-        <View style={styles.section}>
-          <View style={styles.sectionTitleContainer}>
-            <Text style={styles.sectionTitle}>Emergency Contacts</Text>
-          </View>
-          {profile.show_emergency_contacts ? (
-            emergencyContacts.length > 0 ? (
-              emergencyContacts.map((contact, index) => (
-                <View key={index} style={styles.contactItem}>
-                  <Icon name="person" size={24} color={colors.white} style={styles.contactIcon} />
-                  <View style={styles.contactInfo}>
-                    <Text style={styles.contactName}>{contact.name}</Text>
-                    <Text style={styles.contactPhone}>{contact.phone}</Text>
-                  </View>
+        <View style={styles.emergencyContactsCard}>
+          <Text style={styles.sectionTitle}>Emergency Contacts</Text>
+          {profile.show_emergency_contact && emergencyContacts.length > 0 ? (
+            emergencyContacts.map((contact) => (
+              <View key={contact.id} style={styles.contactItem}>
+                <Icon name="person" size={24} color={colors.white} style={styles.contactIcon} />
+                <View style={styles.contactInfo}>
+                  <Text style={styles.contactName}>{contact.name}</Text>
+                  <Text style={styles.contactPhone}>{contact.phone}</Text>
                 </View>
-              ))
-            ) : (
-              <Text style={styles.noContactsText}>This user has not added any emergency contacts.</Text>
-            )
+              </View>
+            ))
           ) : (
-            <Text style={styles.notEnabledText}>User is not sharing emergency contacts.</Text>
+            <Text style={styles.noContactsText}>
+              The user has not set any emergency contacts.
+            </Text>
           )}
         </View>
       </ScrollView>
@@ -218,6 +209,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 8,
     elevation: 5,
+    alignItems: 'center',
   },
   sectionTitleContainer: {
     alignItems: 'center',
@@ -228,6 +220,8 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: colors.text.primary,
     fontFamily: 'ClashGrotesk-Bold',
+    marginBottom: 16,
+    textAlign: 'center',
   },
   contactItem: {
     flexDirection: 'row',
@@ -259,7 +253,6 @@ const styles = StyleSheet.create({
     color: colors.text.secondary,
     fontFamily: 'ClashGrotesk-Medium',
     textAlign: 'center',
-    marginTop: 10,
   },
   notEnabledText: {
     fontSize: 16,
@@ -267,6 +260,18 @@ const styles = StyleSheet.create({
     fontFamily: 'ClashGrotesk-Medium',
     textAlign: 'center',
     marginTop: 10,
+  },
+  emergencyContactsCard: {
+    padding: 20,
+    marginTop: 20,
+    marginHorizontal: 16,
+    backgroundColor: colors.surface,
+    borderRadius: 20,
+    shadowColor: colors.text.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
   },
 });
 

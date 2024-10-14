@@ -83,7 +83,7 @@ const SignUp = () => {
             full_name: fullName,
             email: email,
             date_of_birth: `${year}-${String(monthValue).padStart(2, '0')}-${String(dayValue).padStart(2, '0')}`,
-            show_emergency_contacts: false
+            show_emergency_contact: false
           });
 
         if (profileError) throw profileError;

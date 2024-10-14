@@ -38,7 +38,7 @@ const Profile = ({ session }) => {
 
       if (error) throw error;
       setUser(data);
-      setShowEmergencyContacts(data.show_emergency_contacts); // Use the correct column name
+      setShowEmergencyContacts(data.show_emergency_contact);
     } catch (error) {
       console.error('Error fetching user profile:', error);
       Alert.alert('Error', 'Failed to load user profile');
@@ -65,7 +65,7 @@ const Profile = ({ session }) => {
       const newValue = !showEmergencyContacts;
       const { data, error } = await supabase
         .from('profiles')
-        .update({ show_emergency_contacts: newValue }) // Use the correct column name
+        .update({ show_emergency_contact: newValue })
         .eq('user_id', session.user.id);
 
       if (error) throw error;
@@ -367,8 +367,8 @@ const Profile = ({ session }) => {
               />
             </View>
           </View>
-          {emergencyContacts.map((contact, index) => (
-            <View key={index} style={styles.contactItem}>
+          {emergencyContacts.map((contact) => (
+            <View key={contact.id} style={styles.contactItem}>
               <Icon name="person" size={24} color={colors.white} style={styles.contactIcon} />
               <View style={styles.contactInfo}>
                 <Text style={styles.contactName}>{contact.name}</Text>
